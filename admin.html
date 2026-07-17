@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>記帳米粒 ｜ 中控後台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;700&family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#15120e;
+    --surface:#1d1911;
+    --surface-2:#241f16;
+    --line:#39331f;
+    --grain:#e8b84b;
+    --grain-dim:#8a7233;
+    --jade:#7fa383;
+    --terracotta:#c6603f;
+    --text:#f3eee3;
+    --text-muted:#a89d84;
+    --radius:10px;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--ink);color:var(--text);font-family:"Noto Sans TC",system-ui,sans-serif;min-height:100vh;}
+  h1,h2,h3{font-family:"Noto Serif TC",serif;font-weight:700;margin:0;}
+  .mono{font-family:"JetBrains Mono",monospace;}
+  button{font-family:inherit;cursor:pointer;}
+  a{color:var(--grain);}
+
+  /* ---------- 登入畫面 ---------- */
+  #loginScreen{
+    min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(232,184,74,.07), transparent 40%),
+      radial-gradient(circle at 80% 80%, rgba(127,163,131,.06), transparent 40%),
+      var(--ink);
+    padding:24px;
+  }
+  .login-card{
+    width:100%;max-width:380px;background:var(--surface);border:1px solid var(--line);
+    border-radius:16px;padding:36px 32px;box-shadow:0 20px 60px rgba(0,0,0,.4);
+  }
+  .grain-logo{width:44px;height:44px;margin-bottom:18px;}
+  .login-card h1{font-size:22px;margin-bottom:4px;}
+  .login-card p.sub{color:var(--text-muted);font-size:13px;margin:0 0 26px;}
+  .field{margin-bottom:16px;}
+  .field label{display:block;font-size:12px;color:var(--text-muted);margin-bottom:6px;letter-spacing:.02em;}
+  .field input{
+    width:100%;padding:11px 13px;background:var(--surface-2);border:1px solid var(--line);
+    border-radius:8px;color:var(--text);font-size:14px;outline:none;transition:border-color .15s;
+  }
+  .field input:focus{border-color:var(--grain);}
+  .btn-primary{
+    width:100%;padding:12px;background:var(--grain);color:#1d1911;border:none;border-radius:8px;
+    font-weight:700;font-size:14px;letter-spacing:.02em;transition:filter .15s;
+  }
+  .btn-primary:hover{filter:brightness(1.08);}
+  .btn-primary:disabled{opacity:.5;cursor:default;}
+  .login-error{
+    margin-top:14px;padding:10px 12px;background:rgba(198,96,63,.12);border:1px solid rgba(198,96,63,.4);
+    border-radius:8px;color:#e8927a;font-size:13px;display:none;
+  }
+
+  /* ---------- 後台主畫面 ---------- */
+  #appScreen{display:none;min-height:100vh;}
+  .shell{display:grid;grid-template-columns:220px 1fr;min-height:100vh;}
+  .sidebar{
+    background:var(--surface);border-right:1px solid var(--line);padding:22px 14px;
+    display:flex;flex-direction:column;gap:4px;
+  }
+  .brand{display:flex;align-items:center;gap:10px;padding:6px 10px 22px;}
+  .brand .grain-logo{width:26px;height:26px;margin:0;}
+  .brand span{font-family:"Noto Serif TC",serif;font-weight:700;font-size:16px;}
+  .nav-item{
+    display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;
+    color:var(--text-muted);font-size:14px;background:transparent;border:none;text-align:left;width:100%;
+    transition:background .15s,color .15s;
+  }
+  .nav-item:hover{background:var(--surface-2);color:var(--text);}
+  .nav-item.active{background:var(--surface-2);color:var(--grain);}
+  .sidebar-bottom{margin-top:auto;padding-top:14px;border-top:1px solid var(--line);}
+  .logout-btn{
+    width:100%;padding:9px 12px;background:transparent;border:1px solid var(--line);border-radius:8px;
+    color:var(--text-muted);font-size:13px;
+  }
+  .logout-btn:hover{border-color:var(--terracotta);color:var(--terracotta);}
+
+  .main{padding:28px 34px 60px;overflow-x:auto;}
+  .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:26px;gap:16px;flex-wrap:wrap;}
+  .topbar h1{font-size:22px;}
+  .status-pill{
+    display:inline-flex;align-items:center;gap:7px;padding:6px 13px;border-radius:99px;font-size:12px;font-weight:600;
+    background:var(--surface-2);border:1px solid var(--line);color:var(--text-muted);
+  }
+  .status-dot{width:8px;height:8px;border-radius:50%;background:var(--text-muted);}
+  .status-pill.on .status-dot{background:var(--jade);box-shadow:0 0 0 3px rgba(127,163,131,.2);animation:breathe 2.2s ease-in-out infinite;}
+  .status-pill.on{color:var(--jade);border-color:rgba(127,163,131,.35);}
+  .status-pill.off .status-dot{background:var(--terracotta);}
+  .status-pill.off{color:var(--terracotta);border-color:rgba(198,96,63,.35);}
+  @keyframes breathe{0%,100%{opacity:1;}50%{opacity:.35;}}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:28px;}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;}
+  .card .num{font-family:"JetBrains Mono",monospace;font-size:26px;font-weight:600;color:var(--grain);}
+  .card .label{font-size:12px;color:var(--text-muted);margin-top:4px;}
+
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:22px 24px;margin-bottom:22px;}
+  .panel h2{font-size:16px;margin-bottom:4px;}
+  .panel .desc{color:var(--text-muted);font-size:13px;margin:4px 0 18px;}
+
+  .switch-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:6px 0;}
+  .switch-row .txt strong{display:block;font-size:14px;margin-bottom:3px;}
+  .switch-row .txt span{color:var(--text-muted);font-size:12.5px;}
+  .toggle{position:relative;width:50px;height:28px;flex-shrink:0;}
+  .toggle input{opacity:0;width:0;height:0;}
+  .toggle .track{position:absolute;inset:0;background:#3a3220;border-radius:99px;transition:.2s;cursor:pointer;}
+  .toggle .track::before{content:"";position:absolute;width:22px;height:22px;left:3px;top:3px;background:#efe6d0;border-radius:50%;transition:.2s;}
+  .toggle input:checked + .track{background:var(--jade);}
+  .toggle input:checked + .track::before{transform:translateX(22px);}
+
+  table{width:100%;border-collapse:collapse;font-size:13.5px;}
+  th{text-align:left;color:var(--text-muted);font-weight:600;font-size:11.5px;letter-spacing:.03em;text-transform:uppercase;padding:8px 10px;border-bottom:1px solid var(--line);}
+  td{padding:10px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  td.muted{color:var(--text-muted);}
+  .badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11.5px;font-weight:600;}
+  .badge.normal{background:rgba(127,163,131,.15);color:var(--jade);}
+  .badge.order{background:rgba(232,184,74,.15);color:var(--grain);}
+  .badge.settle{background:rgba(198,96,63,.15);color:#e8927a;}
+
+  .form-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;}
+  .form-row input[type=text], .form-row textarea{
+    background:var(--surface-2);border:1px solid var(--line);border-radius:7px;color:var(--text);
+    padding:9px 11px;font-size:13.5px;font-family:inherit;outline:none;
+  }
+  .form-row input[type=text]:focus, .form-row textarea:focus{border-color:var(--grain);}
+  .form-row textarea{width:100%;min-height:64px;resize:vertical;}
+  .btn-sm{
+    padding:7px 14px;border-radius:7px;border:1px solid var(--line);background:var(--surface-2);
+    color:var(--text);font-size:12.5px;font-weight:600;transition:.15s;
+  }
+  .btn-sm:hover{border-color:var(--grain);color:var(--grain);}
+  .btn-sm.danger:hover{border-color:var(--terracotta);color:var(--terracotta);}
+  .btn-sm.add{background:var(--grain);color:#1d1911;border-color:var(--grain);}
+  .btn-sm.add:hover{filter:brightness(1.08);color:#1d1911;}
+
+  .empty{color:var(--text-muted);font-size:13px;padding:20px 6px;text-align:center;}
+  .toast{
+    position:fixed;bottom:22px;right:22px;background:var(--surface);border:1px solid var(--line);
+    padding:12px 18px;border-radius:9px;font-size:13.5px;box-shadow:0 10px 30px rgba(0,0,0,.4);
+    opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none;z-index:50;
+  }
+  .toast.show{opacity:1;transform:translateY(0);}
+  .toast.err{border-color:rgba(198,96,63,.5);color:#e8927a;}
+  .toast.ok{border-color:rgba(127,163,131,.5);color:var(--jade);}
+
+  .section{display:none;}
+  .section.active{display:block;}
+  .refresh-link{color:var(--text-muted);font-size:12.5px;background:none;border:none;text-decoration:underline;}
+  .refresh-link:hover{color:var(--grain);}
+
+  @media (max-width:760px){
+    .shell{grid-template-columns:1fr;}
+    .sidebar{flex-direction:row;overflow-x:auto;border-right:none;border-bottom:1px solid var(--line);}
+    .sidebar-bottom{margin-top:0;padding-top:0;border-top:none;}
+    .main{padding:20px;}
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ 登入畫面 ============ -->
+<div id="loginScreen">
+  <div class="login-card">
+    <svg class="grain-logo" viewBox="0 0 44 44" fill="none"><path d="M22 4C13 12 8 20 8 27a14 14 0 0 0 28 0c0-7-5-15-14-23Z" fill="#e8b84b"/><path d="M22 4c4 4 7 8 9 12" stroke="#1d1911" stroke-width="1.4" stroke-linecap="round" opacity=".35"/></svg>
+    <h1>記帳米粒中控後台</h1>
+    <p class="sub">請輸入管理帳號密碼</p>
+    <div class="field">
+      <label>帳號</label>
+      <input type="text" id="loginUser" autocomplete="username" />
+    </div>
+    <div class="field">
+      <label>密碼</label>
+      <input type="password" id="loginPass" autocomplete="current-password" />
+    </div>
+    <button class="btn-primary" id="loginBtn">登入</button>
+    <div class="login-error" id="loginError"></div>
+  </div>
+</div>
+
+<!-- ============ 後台主畫面 ============ -->
+<div id="appScreen">
+  <div class="shell">
+    <div class="sidebar">
+      <div class="brand">
+        <svg class="grain-logo" viewBox="0 0 44 44" fill="none"><path d="M22 4C13 12 8 20 8 27a14 14 0 0 0 28 0c0-7-5-15-14-23Z" fill="#e8b84b"/></svg>
+        <span>記帳米粒</span>
+      </div>
+      <button class="nav-item active" data-tab="dashboard">📊　總覽</button>
+      <button class="nav-item" data-tab="switch">🔴　機器人開關</button>
+      <button class="nav-item" data-tab="keywords">💬　關鍵字回覆</button>
+      <button class="nav-item" data-tab="sensitive">🚫　敏感詞</button>
+      <button class="nav-item" data-tab="groups">👥　群組管理</button>
+      <button class="nav-item" data-tab="errors">🧾　錯誤紀錄</button>
+      <div class="sidebar-bottom">
+        <button class="logout-btn" id="logoutBtn">登出</button>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="topbar">
+        <h1 id="pageTitle">總覽</h1>
+        <div class="status-pill" id="statusPill"><span class="status-dot"></span><span id="statusPillText">讀取中…</span></div>
+      </div>
+
+      <!-- 總覽 -->
+      <div class="section active" id="tab-dashboard">
+        <div class="grid" id="dashboardCards"></div>
+        <div class="panel">
+          <h2>資料庫連線</h2>
+          <p class="desc" id="dbDetail">讀取中…</p>
+        </div>
+      </div>
+
+      <!-- 機器人開關 -->
+      <div class="section" id="tab-switch">
+        <div class="panel">
+          <h2>全域緊急開關</h2>
+          <p class="desc">關閉後，機器人會對所有訊息完全靜默、不寫入任何資料，適合維護或緊急止血時使用。</p>
+          <div class="switch-row">
+            <div class="txt">
+              <strong>機器人回應</strong>
+              <span id="switchHint">讀取中…</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="botSwitchInput" />
+              <span class="track"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- 關鍵字回覆 -->
+      <div class="section" id="tab-keywords">
+        <div class="panel">
+          <h2>新增關鍵字回覆</h2>
+          <p class="desc">使用者訊息只要「包含」這個關鍵字，就會直接回覆下面設定的內容（不經過 AI）。</p>
+          <div class="form-row">
+            <input type="text" id="kwInput" placeholder="關鍵字，例如：電鍋" style="min-width:160px;" />
+          </div>
+          <div class="form-row">
+            <textarea id="kwReplyInput" placeholder="對應的回覆內容…"></textarea>
+          </div>
+          <button class="btn-sm add" id="kwAddBtn">新增</button>
+        </div>
+        <div class="panel">
+          <h2>目前的關鍵字回覆</h2>
+          <div id="kwTableWrap"><p class="empty">讀取中…</p></div>
+        </div>
+      </div>
+
+      <!-- 敏感詞 -->
+      <div class="section" id="tab-sensitive">
+        <div class="panel">
+          <h2>新增敏感詞</h2>
+          <p class="desc">訊息中若出現敏感詞，機器人會回覆制式拒答訊息，不會進到記帳/AI 流程。</p>
+          <div class="form-row">
+            <input type="text" id="swInput" placeholder="敏感詞，例如：賭博" style="min-width:200px;" />
+            <button class="btn-sm add" id="swAddBtn">新增</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>目前的敏感詞清單</h2>
+          <div id="swTableWrap"><p class="empty">讀取中…</p></div>
+        </div>
+      </div>
+
+      <!-- 群組管理 -->
+      <div class="section" id="tab-groups">
+        <div class="panel">
+          <h2>群組狀態</h2>
+          <p class="desc">若群組卡在「揪團中」或「結算中」出不來，可以在這裡強制重置回一般模式。</p>
+          <div id="groupsTableWrap"><p class="empty">讀取中…</p></div>
+        </div>
+      </div>
+
+      <!-- 錯誤紀錄 -->
+      <div class="section" id="tab-errors">
+        <div class="panel">
+          <h2 style="display:flex;align-items:center;justify-content:space-between;">
+            <span>最近錯誤紀錄</span>
+            <span>
+              <button class="refresh-link" id="errRefreshBtn">重新整理</button>
+              &nbsp;·&nbsp;
+              <button class="refresh-link" id="errClearBtn">清空紀錄</button>
+            </span>
+          </h2>
+          <p class="desc">機器人執行中若發生例外，都會記錄在這裡（僅保留最近 100 筆）。</p>
+          <div id="errTableWrap"><p class="empty">讀取中…</p></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API_BASE = "";
+let TOKEN = localStorage.getItem("mili_admin_token") || "";
+
+function toast(msg, type="ok"){
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.className = "toast show " + type;
+  setTimeout(()=> el.className = "toast " + type, 2200);
+}
+
+async function api(path, opts={}){
+  const headers = Object.assign({"Content-Type":"application/json"}, opts.headers || {});
+  if (TOKEN) headers["Authorization"] = "Bearer " + TOKEN;
+  const res = await fetch(API_BASE + path, Object.assign({}, opts, {headers}));
+  if (res.status === 401){
+    logout();
+    throw new Error("登入已逾時，請重新登入");
+  }
+  let data = null;
+  try { data = await res.json(); } catch(e) {}
+  if (!res.ok){
+    throw new Error((data && data.detail) || ("請求失敗（" + res.status + "）"));
+  }
+  return data;
+}
+
+function escapeHtml(s){
+  return (s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+// ---------- 登入 ----------
+document.getElementById("loginBtn").addEventListener("click", doLogin);
+document.getElementById("loginPass").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
+
+async function doLogin(){
+  const username = document.getElementById("loginUser").value.trim();
+  const password = document.getElementById("loginPass").value;
+  const errEl = document.getElementById("loginError");
+  const btn = document.getElementById("loginBtn");
+  errEl.style.display = "none";
+  if (!username || !password) return;
+  btn.disabled = true; btn.textContent = "登入中…";
+  try {
+    const res = await fetch(API_BASE + "/api/admin/login", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({username, password})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "登入失敗");
+    TOKEN = data.token;
+    localStorage.setItem("mili_admin_token", TOKEN);
+    enterApp();
+  } catch(e){
+    errEl.textContent = e.message;
+    errEl.style.display = "block";
+  } finally {
+    btn.disabled = false; btn.textContent = "登入";
+  }
+}
+
+function logout(){
+  TOKEN = "";
+  localStorage.removeItem("mili_admin_token");
+  document.getElementById("appScreen").style.display = "none";
+  document.getElementById("loginScreen").style.display = "flex";
+}
+document.getElementById("logoutBtn").addEventListener("click", logout);
+
+// ---------- 分頁切換 ----------
+const titles = {dashboard:"總覽", switch:"機器人開關", keywords:"關鍵字回覆", sensitive:"敏感詞", groups:"群組管理", errors:"錯誤紀錄"};
+document.querySelectorAll(".nav-item").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
+    document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
+    document.getElementById("pageTitle").textContent = titles[btn.dataset.tab];
+    loadTab(btn.dataset.tab);
+  });
+});
+
+function loadTab(tab){
+  if (tab === "dashboard") loadDashboard();
+  if (tab === "switch") loadSwitch();
+  if (tab === "keywords") loadKeywords();
+  if (tab === "sensitive") loadSensitive();
+  if (tab === "groups") loadGroups();
+  if (tab === "errors") loadErrors();
+}
+
+function updateStatusPill(enabled){
+  const pill = document.getElementById("statusPill");
+  const txt = document.getElementById("statusPillText");
+  pill.className = "status-pill " + (enabled ? "on" : "off");
+  txt.textContent = enabled ? "機器人運作中" : "機器人已關閉";
+}
+
+// ---------- 總覽 ----------
+async function loadDashboard(){
+  try {
+    const s = await api("/api/admin/status");
+    updateStatusPill(s.bot_enabled);
+    document.getElementById("dashboardCards").innerHTML = `
+      <div class="card"><div class="num">${s.counts.groups}</div><div class="label">群組總數</div></div>
+      <div class="card"><div class="num">${s.counts.keyword_replies}</div><div class="label">關鍵字回覆</div></div>
+      <div class="card"><div class="num">${s.counts.sensitive_words}</div><div class="label">敏感詞數量</div></div>
+      <div class="card"><div class="num">${s.counts.unresolved_errors}</div><div class="label">近24小時錯誤</div></div>
+    `;
+    document.getElementById("dbDetail").textContent = s.db_pool_ok
+      ? "連線池運作正常（PooledDB，ping=1 自動偵測失效連線）"
+      : "⚠️ 連線異常：" + (s.db_pool_error || "未知錯誤");
+  } catch(e){ toast(e.message, "err"); }
+}
+
+// ---------- 機器人開關 ----------
+async function loadSwitch(){
+  try {
+    const s = await api("/api/admin/status");
+    const input = document.getElementById("botSwitchInput");
+    input.checked = s.bot_enabled;
+    document.getElementById("switchHint").textContent = s.bot_enabled ? "目前正常回應訊息" : "目前對所有訊息靜默中";
+    updateStatusPill(s.bot_enabled);
+  } catch(e){ toast(e.message, "err"); }
+}
+document.getElementById("botSwitchInput").addEventListener("change", async (e) => {
+  const enabled = e.target.checked;
+  if (!enabled && !confirm("確定要關閉機器人嗎？關閉後所有訊息都不會被回應。")){
+    e.target.checked = true; return;
+  }
+  try {
+    await api("/api/admin/bot-switch", {method:"POST", body: JSON.stringify({enabled})});
+    toast(enabled ? "機器人已開啟" : "機器人已關閉", "ok");
+    loadSwitch();
+  } catch(err){ toast(err.message, "err"); e.target.checked = !enabled; }
+});
+
+// ---------- 關鍵字回覆 ----------
+async function loadKeywords(){
+  const wrap = document.getElementById("kwTableWrap");
+  try {
+    const rows = await api("/api/admin/keyword-replies");
+    if (!rows.length){ wrap.innerHTML = '<p class="empty">目前沒有任何關鍵字回覆</p>'; return; }
+    wrap.innerHTML = `<table><thead><tr><th>關鍵字</th><th>回覆內容</th><th>狀態</th><th></th></tr></thead><tbody>
+      ${rows.map(r => `
+        <tr>
+          <td class="mono">${escapeHtml(r.keyword)}</td>
+          <td style="max-width:360px;white-space:pre-wrap;">${escapeHtml(r.reply_text)}</td>
+          <td><label class="toggle" style="width:40px;height:22px;">
+                <input type="checkbox" ${r.enabled ? "checked" : ""} onchange="toggleKeyword(${r.id}, this.checked)" />
+                <span class="track"></span>
+              </label></td>
+          <td><button class="btn-sm danger" onclick="deleteKeyword(${r.id})">刪除</button></td>
+        </tr>`).join("")}
+    </tbody></table>`;
+  } catch(e){ wrap.innerHTML = '<p class="empty">讀取失敗</p>'; toast(e.message, "err"); }
+}
+document.getElementById("kwAddBtn").addEventListener("click", async () => {
+  const keyword = document.getElementById("kwInput").value.trim();
+  const reply_text = document.getElementById("kwReplyInput").value.trim();
+  if (!keyword || !reply_text) return toast("關鍵字與回覆內容都要填喔", "err");
+  try {
+    await api("/api/admin/keyword-replies", {method:"POST", body: JSON.stringify({keyword, reply_text, enabled:true})});
+    document.getElementById("kwInput").value = ""; document.getElementById("kwReplyInput").value = "";
+    toast("已新增", "ok"); loadKeywords();
+  } catch(e){ toast(e.message, "err"); }
+});
+async function toggleKeyword(id, enabled){
+  try { await api(`/api/admin/keyword-replies/${id}`, {method:"PATCH", body: JSON.stringify({enabled})}); toast("已更新", "ok"); }
+  catch(e){ toast(e.message, "err"); }
+}
+async function deleteKeyword(id){
+  if (!confirm("確定要刪除這筆關鍵字回覆嗎？")) return;
+  try { await api(`/api/admin/keyword-replies/${id}`, {method:"DELETE"}); toast("已刪除", "ok"); loadKeywords(); }
+  catch(e){ toast(e.message, "err"); }
+}
+
+// ---------- 敏感詞 ----------
+async function loadSensitive(){
+  const wrap = document.getElementById("swTableWrap");
+  try {
+    const rows = await api("/api/admin/sensitive-words");
+    if (!rows.length){ wrap.innerHTML = '<p class="empty">目前沒有設定敏感詞</p>'; return; }
+    wrap.innerHTML = `<table><thead><tr><th>敏感詞</th><th></th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td class="mono">${escapeHtml(r.word)}</td><td><button class="btn-sm danger" onclick="deleteSensitive(${r.id})">刪除</button></td></tr>`).join("")}
+    </tbody></table>`;
+  } catch(e){ wrap.innerHTML = '<p class="empty">讀取失敗</p>'; toast(e.message, "err"); }
+}
+document.getElementById("swAddBtn").addEventListener("click", async () => {
+  const word = document.getElementById("swInput").value.trim();
+  if (!word) return;
+  try {
+    await api("/api/admin/sensitive-words", {method:"POST", body: JSON.stringify({word})});
+    document.getElementById("swInput").value = "";
+    toast("已新增", "ok"); loadSensitive();
+  } catch(e){ toast(e.message, "err"); }
+});
+async function deleteSensitive(id){
+  if (!confirm("確定要刪除這個敏感詞嗎？")) return;
+  try { await api(`/api/admin/sensitive-words/${id}`, {method:"DELETE"}); toast("已刪除", "ok"); loadSensitive(); }
+  catch(e){ toast(e.message, "err"); }
+}
+
+// ---------- 群組管理 ----------
+async function loadGroups(){
+  const wrap = document.getElementById("groupsTableWrap");
+  try {
+    const rows = await api("/api/admin/groups");
+    if (!rows.length){ wrap.innerHTML = '<p class="empty">目前沒有任何群組資料</p>'; return; }
+    const labelMap = {normal:"一般", order:"揪團中", settle:"結算中"};
+    wrap.innerHTML = `<table><thead><tr><th>群組 ID</th><th>狀態</th><th>進行中單號</th><th></th></tr></thead><tbody>
+      ${rows.map(r => `
+        <tr>
+          <td class="mono">${escapeHtml(r.group_id)}</td>
+          <td><span class="badge ${r.state}">${labelMap[r.state] || r.state}</span></td>
+          <td class="mono muted">${r.active_order_code ? "#" + escapeHtml(r.active_order_code) : "—"}</td>
+          <td><button class="btn-sm" ${r.state === "normal" ? "disabled" : ""} onclick="resetGroup('${r.group_id}')">重置為一般</button></td>
+        </tr>`).join("")}
+    </tbody></table>`;
+  } catch(e){ wrap.innerHTML = '<p class="empty">讀取失敗</p>'; toast(e.message, "err"); }
+}
+async function resetGroup(groupId){
+  if (!confirm("確定要把這個群組強制重置回一般模式嗎？")) return;
+  try { await api(`/api/admin/groups/${encodeURIComponent(groupId)}/reset`, {method:"POST"}); toast("已重置", "ok"); loadGroups(); }
+  catch(e){ toast(e.message, "err"); }
+}
+
+// ---------- 錯誤紀錄 ----------
+async function loadErrors(){
+  const wrap = document.getElementById("errTableWrap");
+  try {
+    const rows = await api("/api/admin/errors?limit=100");
+    if (!rows.length){ wrap.innerHTML = '<p class="empty">目前沒有錯誤紀錄 🎉</p>'; return; }
+    wrap.innerHTML = `<table><thead><tr><th>時間</th><th>來源</th><th>訊息</th><th>對象</th></tr></thead><tbody>
+      ${rows.map(r => `
+        <tr>
+          <td class="mono muted" style="white-space:nowrap;">${escapeHtml((r.created_at||"").replace("T"," ").slice(0,19))}</td>
+          <td>${escapeHtml(r.source)}</td>
+          <td style="max-width:420px;white-space:pre-wrap;">${escapeHtml(r.message)}</td>
+          <td class="mono muted">${escapeHtml(r.target_id || "—")}</td>
+        </tr>`).join("")}
+    </tbody></table>`;
+  } catch(e){ wrap.innerHTML = '<p class="empty">讀取失敗</p>'; toast(e.message, "err"); }
+}
+document.getElementById("errRefreshBtn").addEventListener("click", loadErrors);
+document.getElementById("errClearBtn").addEventListener("click", async () => {
+  if (!confirm("確定要清空所有錯誤紀錄嗎？此動作無法復原。")) return;
+  try { await api("/api/admin/errors", {method:"DELETE"}); toast("已清空", "ok"); loadErrors(); }
+  catch(e){ toast(e.message, "err"); }
+});
+
+// ---------- 啟動 ----------
+async function enterApp(){
+  document.getElementById("loginScreen").style.display = "none";
+  document.getElementById("appScreen").style.display = "block";
+  loadDashboard();
+}
+
+(async function init(){
+  if (TOKEN){
+    try {
+      await api("/api/admin/status");
+      enterApp();
+    } catch(e){
+      logout();
+    }
+  }
+})();
+</script>
+</body>
+</html>

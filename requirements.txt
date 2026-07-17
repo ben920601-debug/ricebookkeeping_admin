@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pydantic
+python-dotenv
+pymysql
+cryptography
+
+DBUtils>=3.0.0
+PyJWT>=2.7.0
