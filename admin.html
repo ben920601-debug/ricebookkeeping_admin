@@ -201,6 +201,7 @@
       <button class="nav-item" data-tab="keywords">💬　關鍵字回覆</button>
       <button class="nav-item" data-tab="sensitive">🚫　敏感詞</button>
       <button class="nav-item" data-tab="groups">👥　群組管理</button>
+      <button class="nav-item" data-tab="broadcast">📣　群組廣播</button>
       <button class="nav-item" data-tab="errors">🧾　錯誤紀錄</button>
       <div class="sidebar-bottom">
         <button class="logout-btn" id="logoutBtn">登出</button>
@@ -217,7 +218,10 @@
       <div class="section active" id="tab-dashboard">
         <div class="grid" id="dashboardCards"></div>
         <div class="panel">
-          <h2>資料庫連線</h2>
+          <h2 style="display:flex;align-items:center;justify-content:space-between;">
+            <span>資料庫連線</span>
+            <button class="refresh-link" id="dashRefreshBtn">重新整理</button>
+          </h2>
           <p class="desc" id="dbDetail">讀取中…</p>
         </div>
       </div>
@@ -226,7 +230,7 @@
       <div class="section" id="tab-switch">
         <div class="panel">
           <h2>全域緊急開關</h2>
-          <p class="desc">關閉後，機器人會對所有訊息完全靜默、不寫入任何資料，適合維護或緊急止血時使用。</p>
+          <p class="desc">關閉後，機器人會回覆下面設定的訊息，不會再進入記帳/AI 流程。設定變更最慢 5 秒內會自動生效，不用重啟 bot 服務。</p>
           <div class="switch-row">
             <div class="txt">
               <strong>機器人回應</strong>
@@ -237,6 +241,15 @@
               <span class="track"></span>
             </label>
           </div>
+        </div>
+        <div class="panel">
+          <h2>關閉時的回覆訊息</h2>
+          <p class="desc">機器人關閉期間，使用者傳訊息過來時會統一回覆這段文字。</p>
+          <div class="form-row">
+            <textarea id="maintenanceMsgInput" placeholder="🤖 系統維護中，請稍後再試。"></textarea>
+          </div>
+          <button class="btn-sm add" id="maintenanceSaveBtn">儲存訊息</button>
+          <button class="btn-sm" id="switchRefreshBtn" style="margin-left:8px;">重新查詢目前狀態</button>
         </div>
       </div>
 
@@ -266,6 +279,9 @@
           <p class="desc">訊息中若出現敏感詞，機器人會回覆制式拒答訊息，不會進到記帳/AI 流程。</p>
           <div class="form-row">
             <input type="text" id="swInput" placeholder="敏感詞，例如：賭博" style="min-width:200px;" />
+          </div>
+          <div class="form-row">
+            <input type="text" id="swDescInput" placeholder="細項說明（選填），例如：與賭博相關的討論" style="min-width:320px;" />
             <button class="btn-sm add" id="swAddBtn">新增</button>
           </div>
         </div>
@@ -279,8 +295,25 @@
       <div class="section" id="tab-groups">
         <div class="panel">
           <h2>群組狀態</h2>
-          <p class="desc">若群組卡在「揪團中」或「結算中」出不來，可以在這裡強制重置回一般模式。</p>
+          <p class="desc">若群組卡在「揪團中」或「結算中」出不來，可以在這裡強制重置回一般模式。「核銷比例」= 核銷次數 ÷ 團單次數，僅供參考。</p>
           <div id="groupsTableWrap"><p class="empty">讀取中…</p></div>
+        </div>
+      </div>
+
+      <!-- 群組廣播 -->
+      <div class="section" id="tab-broadcast">
+        <div class="panel">
+          <h2>發送私訊</h2>
+          <p class="desc">傳送 1 對 1 私訊給曾經在個人聊天中跟機器人互動過的使用者（無法發送給從未私訊過機器人的人，這是 LINE 的限制）。</p>
+          <div class="form-row">
+            <select id="bcTargetSelect" style="min-width:280px;background:var(--surface-2);border:1px solid var(--line);border-radius:7px;color:var(--text);padding:9px 11px;font-size:13.5px;">
+              <option value="">讀取名單中…</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <textarea id="bcMessageInput" placeholder="要發送的訊息內容…"></textarea>
+          </div>
+          <button class="btn-sm add" id="bcSendBtn">發送</button>
         </div>
       </div>
 
@@ -377,7 +410,7 @@ function logout(){
 document.getElementById("logoutBtn").addEventListener("click", logout);
 
 // ---------- 分頁切換 ----------
-const titles = {dashboard:"總覽", switch:"機器人開關", keywords:"關鍵字回覆", sensitive:"敏感詞", groups:"群組管理", errors:"錯誤紀錄"};
+const titles = {dashboard:"總覽", switch:"機器人開關", keywords:"關鍵字回覆", sensitive:"敏感詞", groups:"群組管理", broadcast:"群組廣播", errors:"錯誤紀錄"};
 document.querySelectorAll(".nav-item").forEach(btn => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
@@ -395,6 +428,7 @@ function loadTab(tab){
   if (tab === "keywords") loadKeywords();
   if (tab === "sensitive") loadSensitive();
   if (tab === "groups") loadGroups();
+  if (tab === "broadcast") loadBroadcastTargets();
   if (tab === "errors") loadErrors();
 }
 
@@ -410,17 +444,24 @@ async function loadDashboard(){
   try {
     const s = await api("/api/admin/status");
     updateStatusPill(s.bot_enabled);
+    const usageText = s.usage.usage_rate === null ? "—" : s.usage.usage_rate + "%";
+    const friendText = s.friend_count === null || s.friend_count === undefined ? "—" : s.friend_count;
     document.getElementById("dashboardCards").innerHTML = `
+      <div class="card"><div class="num">${friendText}</div><div class="label">好友數（約1天延遲）</div></div>
+      <div class="card"><div class="num">${usageText}</div><div class="label">使用率（近7天活躍佔比）</div></div>
+      <div class="card"><div class="num">${s.activity_today.replies}</div><div class="label">今日回覆則數</div></div>
+      <div class="card"><div class="num">${s.activity_today.sensitive_blocks}</div><div class="label">今日敏感詞觸發</div></div>
+      <div class="card"><div class="num">${s.counts.unresolved_errors}</div><div class="label">近24小時錯誤</div></div>
       <div class="card"><div class="num">${s.counts.groups}</div><div class="label">群組總數</div></div>
       <div class="card"><div class="num">${s.counts.keyword_replies}</div><div class="label">關鍵字回覆</div></div>
       <div class="card"><div class="num">${s.counts.sensitive_words}</div><div class="label">敏感詞數量</div></div>
-      <div class="card"><div class="num">${s.counts.unresolved_errors}</div><div class="label">近24小時錯誤</div></div>
     `;
     document.getElementById("dbDetail").textContent = s.db_pool_ok
       ? "連線池運作正常（PooledDB，ping=1 自動偵測失效連線）"
       : "⚠️ 連線異常：" + (s.db_pool_error || "未知錯誤");
   } catch(e){ toast(e.message, "err"); }
 }
+document.getElementById("dashRefreshBtn").addEventListener("click", loadDashboard);
 
 // ---------- 機器人開關 ----------
 async function loadSwitch(){
@@ -428,13 +469,14 @@ async function loadSwitch(){
     const s = await api("/api/admin/status");
     const input = document.getElementById("botSwitchInput");
     input.checked = s.bot_enabled;
-    document.getElementById("switchHint").textContent = s.bot_enabled ? "目前正常回應訊息" : "目前對所有訊息靜默中";
+    document.getElementById("switchHint").textContent = s.bot_enabled ? "目前正常回應訊息" : "目前回覆維護訊息中";
+    document.getElementById("maintenanceMsgInput").value = s.maintenance_message || "";
     updateStatusPill(s.bot_enabled);
   } catch(e){ toast(e.message, "err"); }
 }
 document.getElementById("botSwitchInput").addEventListener("change", async (e) => {
   const enabled = e.target.checked;
-  if (!enabled && !confirm("確定要關閉機器人嗎？關閉後所有訊息都不會被回應。")){
+  if (!enabled && !confirm("確定要關閉機器人嗎？關閉後所有訊息都會收到維護訊息。")){
     e.target.checked = true; return;
   }
   try {
@@ -443,26 +485,73 @@ document.getElementById("botSwitchInput").addEventListener("change", async (e) =
     loadSwitch();
   } catch(err){ toast(err.message, "err"); e.target.checked = !enabled; }
 });
+document.getElementById("maintenanceSaveBtn").addEventListener("click", async () => {
+  const msg = document.getElementById("maintenanceMsgInput").value.trim();
+  if (!msg) return toast("訊息內容不能空白", "err");
+  try {
+    const enabled = document.getElementById("botSwitchInput").checked;
+    await api("/api/admin/bot-switch", {method:"POST", body: JSON.stringify({enabled, maintenance_message: msg})});
+    toast("已儲存維護訊息", "ok");
+  } catch(e){ toast(e.message, "err"); }
+});
+document.getElementById("switchRefreshBtn").addEventListener("click", () => {
+  loadSwitch();
+  toast("已重新查詢（bot 端最慢 5 秒內會自動套用最新設定）", "ok");
+});
 
 // ---------- 關鍵字回覆 ----------
-async function loadKeywords(){
+let _kwRows = [];
+let _kwEditingId = null;
+
+function renderKeywordTable(){
   const wrap = document.getElementById("kwTableWrap");
-  try {
-    const rows = await api("/api/admin/keyword-replies");
-    if (!rows.length){ wrap.innerHTML = '<p class="empty">目前沒有任何關鍵字回覆</p>'; return; }
-    wrap.innerHTML = `<table><thead><tr><th>關鍵字</th><th>回覆內容</th><th>狀態</th><th></th></tr></thead><tbody>
-      ${rows.map(r => `
-        <tr>
+  if (!_kwRows.length){ wrap.innerHTML = '<p class="empty">目前沒有任何關鍵字回覆</p>'; return; }
+  wrap.innerHTML = `<table><thead><tr><th>關鍵字</th><th>回覆內容</th><th>狀態</th><th></th></tr></thead><tbody>
+    ${_kwRows.map(r => {
+      if (r.id === _kwEditingId){
+        return `<tr>
+          <td><input type="text" value="${escapeHtml(r.keyword)}" id="kwEditKeyword" /></td>
+          <td><textarea id="kwEditReply" style="width:100%;min-height:60px;">${escapeHtml(r.reply_text)}</textarea></td>
+          <td class="muted">—</td>
+          <td style="white-space:nowrap;">
+            <button class="btn-sm add" onclick="saveEditKeyword(${r.id})">儲存</button>
+            <button class="btn-sm" onclick="_kwEditingId=null; renderKeywordTable();">取消</button>
+          </td>
+        </tr>`;
+      }
+      return `<tr>
           <td class="mono">${escapeHtml(r.keyword)}</td>
           <td style="max-width:360px;white-space:pre-wrap;">${escapeHtml(r.reply_text)}</td>
           <td><label class="toggle" style="width:40px;height:22px;">
                 <input type="checkbox" ${r.enabled ? "checked" : ""} onchange="toggleKeyword(${r.id}, this.checked)" />
                 <span class="track"></span>
               </label></td>
-          <td><button class="btn-sm danger" onclick="deleteKeyword(${r.id})">刪除</button></td>
-        </tr>`).join("")}
-    </tbody></table>`;
+          <td style="white-space:nowrap;">
+            <button class="btn-sm" onclick="_kwEditingId=${r.id}; renderKeywordTable();">編輯</button>
+            <button class="btn-sm danger" onclick="deleteKeyword(${r.id})">刪除</button>
+          </td>
+        </tr>`;
+    }).join("")}
+  </tbody></table>`;
+}
+
+async function loadKeywords(){
+  const wrap = document.getElementById("kwTableWrap");
+  try {
+    _kwRows = await api("/api/admin/keyword-replies");
+    _kwEditingId = null;
+    renderKeywordTable();
   } catch(e){ wrap.innerHTML = '<p class="empty">讀取失敗</p>'; toast(e.message, "err"); }
+}
+async function saveEditKeyword(id){
+  const keyword = document.getElementById("kwEditKeyword").value.trim();
+  const reply_text = document.getElementById("kwEditReply").value.trim();
+  if (!keyword || !reply_text) return toast("關鍵字與回覆內容都要填喔", "err");
+  try {
+    await api(`/api/admin/keyword-replies/${id}`, {method:"PATCH", body: JSON.stringify({keyword, reply_text})});
+    toast("已更新", "ok");
+    loadKeywords();
+  } catch(e){ toast(e.message, "err"); }
 }
 document.getElementById("kwAddBtn").addEventListener("click", async () => {
   const keyword = document.getElementById("kwInput").value.trim();
@@ -485,22 +574,62 @@ async function deleteKeyword(id){
 }
 
 // ---------- 敏感詞 ----------
+let _swRows = [];
+let _swEditingId = null;
+
+function renderSensitiveTable(){
+  const wrap = document.getElementById("swTableWrap");
+  if (!_swRows.length){ wrap.innerHTML = '<p class="empty">目前沒有設定敏感詞</p>'; return; }
+  wrap.innerHTML = `<table><thead><tr><th>敏感詞</th><th>說明</th><th></th></tr></thead><tbody>
+    ${_swRows.map(r => {
+      if (r.id === _swEditingId){
+        return `<tr>
+          <td><input type="text" value="${escapeHtml(r.word)}" id="swEditWord" style="min-width:140px;" /></td>
+          <td><input type="text" value="${escapeHtml(r.description || '')}" id="swEditDesc" style="width:100%;" /></td>
+          <td style="white-space:nowrap;">
+            <button class="btn-sm add" onclick="saveEditSensitive(${r.id})">儲存</button>
+            <button class="btn-sm" onclick="_swEditingId=null; renderSensitiveTable();">取消</button>
+          </td>
+        </tr>`;
+      }
+      return `<tr>
+          <td class="mono">${escapeHtml(r.word)}</td>
+          <td class="muted">${escapeHtml(r.description || '—')}</td>
+          <td style="white-space:nowrap;">
+            <button class="btn-sm" onclick="_swEditingId=${r.id}; renderSensitiveTable();">編輯</button>
+            <button class="btn-sm danger" onclick="deleteSensitive(${r.id})">刪除</button>
+          </td>
+        </tr>`;
+    }).join("")}
+  </tbody></table>`;
+}
+
 async function loadSensitive(){
   const wrap = document.getElementById("swTableWrap");
   try {
-    const rows = await api("/api/admin/sensitive-words");
-    if (!rows.length){ wrap.innerHTML = '<p class="empty">目前沒有設定敏感詞</p>'; return; }
-    wrap.innerHTML = `<table><thead><tr><th>敏感詞</th><th></th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td class="mono">${escapeHtml(r.word)}</td><td><button class="btn-sm danger" onclick="deleteSensitive(${r.id})">刪除</button></td></tr>`).join("")}
-    </tbody></table>`;
+    _swRows = await api("/api/admin/sensitive-words");
+    _swEditingId = null;
+    renderSensitiveTable();
   } catch(e){ wrap.innerHTML = '<p class="empty">讀取失敗</p>'; toast(e.message, "err"); }
+}
+async function saveEditSensitive(id){
+  const word = document.getElementById("swEditWord").value.trim();
+  const description = document.getElementById("swEditDesc").value.trim();
+  if (!word) return toast("敏感詞不能空白", "err");
+  try {
+    await api(`/api/admin/sensitive-words/${id}`, {method:"PATCH", body: JSON.stringify({word, description})});
+    toast("已更新", "ok");
+    loadSensitive();
+  } catch(e){ toast(e.message, "err"); }
 }
 document.getElementById("swAddBtn").addEventListener("click", async () => {
   const word = document.getElementById("swInput").value.trim();
+  const description = document.getElementById("swDescInput").value.trim();
   if (!word) return;
   try {
-    await api("/api/admin/sensitive-words", {method:"POST", body: JSON.stringify({word})});
+    await api("/api/admin/sensitive-words", {method:"POST", body: JSON.stringify({word, description})});
     document.getElementById("swInput").value = "";
+    document.getElementById("swDescInput").value = "";
     toast("已新增", "ok"); loadSensitive();
   } catch(e){ toast(e.message, "err"); }
 });
@@ -517,12 +646,15 @@ async function loadGroups(){
     const rows = await api("/api/admin/groups");
     if (!rows.length){ wrap.innerHTML = '<p class="empty">目前沒有任何群組資料</p>'; return; }
     const labelMap = {normal:"一般", order:"揪團中", settle:"結算中"};
-    wrap.innerHTML = `<table><thead><tr><th>群組 ID</th><th>狀態</th><th>進行中單號</th><th></th></tr></thead><tbody>
+    wrap.innerHTML = `<table><thead><tr><th>群組 ID</th><th>狀態</th><th>進行中單號</th><th>團單次數</th><th>核銷次數</th><th>核銷比例</th><th></th></tr></thead><tbody>
       ${rows.map(r => `
         <tr>
           <td class="mono">${escapeHtml(r.group_id)}</td>
           <td><span class="badge ${r.state}">${labelMap[r.state] || r.state}</span></td>
           <td class="mono muted">${r.active_order_code ? "#" + escapeHtml(r.active_order_code) : "—"}</td>
+          <td class="mono">${r.order_count}</td>
+          <td class="mono">${r.settlement_count}</td>
+          <td class="mono muted">${r.settlement_ratio === null ? "—" : r.settlement_ratio + "%"}</td>
           <td><button class="btn-sm" ${r.state === "normal" ? "disabled" : ""} onclick="resetGroup('${r.group_id}')">重置為一般</button></td>
         </tr>`).join("")}
     </tbody></table>`;
@@ -534,7 +666,34 @@ async function resetGroup(groupId){
   catch(e){ toast(e.message, "err"); }
 }
 
-// ---------- 錯誤紀錄 ----------
+// ---------- 群組廣播 ----------
+async function loadBroadcastTargets(){
+  const select = document.getElementById("bcTargetSelect");
+  try {
+    const rows = await api("/api/admin/broadcast-targets");
+    if (!rows.length){
+      select.innerHTML = '<option value="">目前沒有已互動過的使用者</option>';
+      return;
+    }
+    select.innerHTML = rows.map(r =>
+      `<option value="${escapeHtml(r.user_id)}">${escapeHtml(r.name || "未命名")}（${escapeHtml(r.user_id.slice(0,10))}…）</option>`
+    ).join("");
+  } catch(e){ select.innerHTML = '<option value="">讀取失敗</option>'; toast(e.message, "err"); }
+}
+document.getElementById("bcSendBtn").addEventListener("click", async () => {
+  const user_id = document.getElementById("bcTargetSelect").value;
+  const message = document.getElementById("bcMessageInput").value.trim();
+  if (!user_id) return toast("請選擇發送對象", "err");
+  if (!message) return toast("訊息內容不能空白", "err");
+  if (!confirm("確定要發送這則訊息嗎？")) return;
+  try {
+    await api("/api/admin/broadcast", {method:"POST", body: JSON.stringify({user_id, message})});
+    toast("已發送", "ok");
+    document.getElementById("bcMessageInput").value = "";
+  } catch(e){ toast(e.message, "err"); }
+});
+
+
 async function loadErrors(){
   const wrap = document.getElementById("errTableWrap");
   try {

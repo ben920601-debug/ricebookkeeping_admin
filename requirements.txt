@@ -4,6 +4,8 @@ pydantic
 python-dotenv
 pymysql
 cryptography
+httpx
+certifi
 
 DBUtils>=3.0.0
 PyJWT>=2.7.0
