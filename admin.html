@@ -159,6 +159,14 @@
   .refresh-link{color:var(--text-muted);font-size:12.5px;background:none;border:none;text-decoration:underline;}
   .refresh-link:hover{color:var(--grain);}
 
+  .db-field-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-bottom:14px;}
+  .db-field-grid label{display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;}
+  .db-field-grid input{width:100%;}
+  .pagination{display:flex;align-items:center;gap:10px;margin-top:14px;font-size:13px;color:var(--text-muted);}
+  .pagination button{padding:5px 12px;border-radius:6px;border:1px solid var(--line);background:var(--surface-2);color:var(--text);font-size:12.5px;}
+  .pagination button:disabled{opacity:.4;cursor:default;}
+  .table-select{background:var(--surface-2);border:1px solid var(--line);border-radius:7px;color:var(--text);padding:9px 11px;font-size:13.5px;min-width:200px;}
+
   @media (max-width:760px){
     .shell{grid-template-columns:1fr;}
     .sidebar{flex-direction:row;overflow-x:auto;border-right:none;border-bottom:1px solid var(--line);}
@@ -202,6 +210,7 @@
       <button class="nav-item" data-tab="sensitive">🚫　敏感詞</button>
       <button class="nav-item" data-tab="groups">👥　群組管理</button>
       <button class="nav-item" data-tab="broadcast">📣　群組廣播</button>
+      <button class="nav-item" data-tab="dbbrowser">🗄️　資料瀏覽</button>
       <button class="nav-item" data-tab="errors">🧾　錯誤紀錄</button>
       <div class="sidebar-bottom">
         <button class="logout-btn" id="logoutBtn">登出</button>
@@ -317,6 +326,37 @@
         </div>
       </div>
 
+      <!-- 資料瀏覽 -->
+      <div class="section" id="tab-dbbrowser">
+        <div class="panel">
+          <h2>資料庫瀏覽器</h2>
+          <p class="desc">直接檢視、修改、新增、刪除記帳相關資料表，省得回 SSH 手動查資料庫。⚠️ 修改/刪除都是直接動到正式資料，操作前請再三確認。</p>
+          <div class="form-row">
+            <select id="dbTableSelect" class="table-select"><option value="">請選擇資料表…</option></select>
+            <input type="text" id="dbSearchInput" placeholder="搜尋文字欄位…" style="min-width:200px;" />
+            <button class="btn-sm" id="dbSearchBtn">搜尋</button>
+            <button class="btn-sm add" id="dbAddToggleBtn" style="display:none;">＋ 新增一筆</button>
+          </div>
+        </div>
+
+        <div class="panel" id="dbAddPanel" style="display:none;">
+          <h2>新增資料</h2>
+          <p class="desc" id="dbAddDesc"></p>
+          <div class="db-field-grid" id="dbAddFields"></div>
+          <button class="btn-sm add" id="dbAddSubmitBtn">送出新增</button>
+          <button class="btn-sm" id="dbAddCancelBtn">取消</button>
+        </div>
+
+        <div class="panel">
+          <div id="dbTableWrap"><p class="empty">請先選擇上面的資料表</p></div>
+          <div class="pagination" id="dbPagination" style="display:none;">
+            <button id="dbPrevBtn">← 上一頁</button>
+            <span id="dbPageInfo"></span>
+            <button id="dbNextBtn">下一頁 →</button>
+          </div>
+        </div>
+      </div>
+
       <!-- 錯誤紀錄 -->
       <div class="section" id="tab-errors">
         <div class="panel">
@@ -410,7 +450,7 @@ function logout(){
 document.getElementById("logoutBtn").addEventListener("click", logout);
 
 // ---------- 分頁切換 ----------
-const titles = {dashboard:"總覽", switch:"機器人開關", keywords:"關鍵字回覆", sensitive:"敏感詞", groups:"群組管理", broadcast:"群組廣播", errors:"錯誤紀錄"};
+const titles = {dashboard:"總覽", switch:"機器人開關", keywords:"關鍵字回覆", sensitive:"敏感詞", groups:"群組管理", broadcast:"群組廣播", dbbrowser:"資料瀏覽", errors:"錯誤紀錄"};
 document.querySelectorAll(".nav-item").forEach(btn => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
@@ -429,6 +469,7 @@ function loadTab(tab){
   if (tab === "sensitive") loadSensitive();
   if (tab === "groups") loadGroups();
   if (tab === "broadcast") loadBroadcastTargets();
+  if (tab === "dbbrowser") loadDbBrowserInit();
   if (tab === "errors") loadErrors();
 }
 
@@ -715,6 +756,185 @@ document.getElementById("errClearBtn").addEventListener("click", async () => {
   if (!confirm("確定要清空所有錯誤紀錄嗎？此動作無法復原。")) return;
   try { await api("/api/admin/errors", {method:"DELETE"}); toast("已清空", "ok"); loadErrors(); }
   catch(e){ toast(e.message, "err"); }
+});
+
+// ---------- 資料瀏覽器 ----------
+let _db = {
+  tablesLoaded: false,
+  table: "",
+  schema: null,       // {columns, primary_key}
+  page: 1,
+  pageSize: 25,
+  total: 0,
+  search: "",
+  rows: [],
+  editingPk: null,
+};
+
+async function loadDbBrowserInit(){
+  if (_db.tablesLoaded) return;
+  const select = document.getElementById("dbTableSelect");
+  try {
+    const res = await api("/api/admin/db/tables");
+    select.innerHTML = '<option value="">請選擇資料表…</option>' +
+      res.tables.map(t => `<option value="${t}">${t}</option>`).join("");
+    _db.tablesLoaded = true;
+  } catch(e){ toast(e.message, "err"); }
+}
+document.getElementById("dbTableSelect").addEventListener("change", async (e) => {
+  _db.table = e.target.value;
+  _db.page = 1;
+  _db.search = "";
+  document.getElementById("dbSearchInput").value = "";
+  if (!_db.table){
+    document.getElementById("dbTableWrap").innerHTML = '<p class="empty">請先選擇上面的資料表</p>';
+    document.getElementById("dbAddToggleBtn").style.display = "none";
+    document.getElementById("dbPagination").style.display = "none";
+    return;
+  }
+  try {
+    _db.schema = await api(`/api/admin/db/tables/${_db.table}/schema`);
+    document.getElementById("dbAddToggleBtn").style.display = "inline-block";
+    buildDbAddForm();
+    await loadDbRows();
+  } catch(err){ toast(err.message, "err"); }
+});
+document.getElementById("dbSearchBtn").addEventListener("click", () => {
+  _db.search = document.getElementById("dbSearchInput").value.trim();
+  _db.page = 1;
+  loadDbRows();
+});
+document.getElementById("dbSearchInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("dbSearchBtn").click();
+});
+
+async function loadDbRows(){
+  if (!_db.table) return;
+  const wrap = document.getElementById("dbTableWrap");
+  wrap.innerHTML = '<p class="empty">讀取中…</p>';
+  try {
+    const qs = new URLSearchParams({
+      page: _db.page, page_size: _db.pageSize, search: _db.search
+    });
+    const res = await api(`/api/admin/db/tables/${_db.table}/rows?${qs.toString()}`);
+    _db.rows = res.rows;
+    _db.total = res.total;
+    _db.editingPk = null;
+    renderDbTable();
+    renderDbPagination();
+  } catch(e){ wrap.innerHTML = '<p class="empty">讀取失敗</p>'; toast(e.message, "err"); }
+}
+
+function renderDbPagination(){
+  const pag = document.getElementById("dbPagination");
+  if (!_db.table){ pag.style.display = "none"; return; }
+  const totalPages = Math.max(1, Math.ceil(_db.total / _db.pageSize));
+  pag.style.display = "flex";
+  document.getElementById("dbPageInfo").textContent = `第 ${_db.page} / ${totalPages} 頁（共 ${_db.total} 筆）`;
+  document.getElementById("dbPrevBtn").disabled = _db.page <= 1;
+  document.getElementById("dbNextBtn").disabled = _db.page >= totalPages;
+}
+document.getElementById("dbPrevBtn").addEventListener("click", () => { if (_db.page > 1){ _db.page--; loadDbRows(); } });
+document.getElementById("dbNextBtn").addEventListener("click", () => {
+  const totalPages = Math.max(1, Math.ceil(_db.total / _db.pageSize));
+  if (_db.page < totalPages){ _db.page++; loadDbRows(); }
+});
+
+function renderDbTable(){
+  const wrap = document.getElementById("dbTableWrap");
+  if (!_db.rows.length){ wrap.innerHTML = '<p class="empty">沒有符合的資料</p>'; return; }
+  const cols = _db.schema.columns.map(c => c.name);
+  const pk = _db.schema.primary_key;
+  wrap.innerHTML = `<div style="overflow-x:auto;"><table><thead><tr>
+      ${cols.map(c => `<th>${escapeHtml(c)}</th>`).join("")}
+      <th></th>
+    </tr></thead><tbody>
+    ${_db.rows.map(r => {
+      const pkVal = pk ? r[pk] : null;
+      const isEditing = pk && String(pkVal) === String(_db.editingPk);
+      if (isEditing){
+        return `<tr>
+          ${cols.map(c => {
+            if (c === pk) return `<td class="mono muted">${escapeHtml(String(r[c] ?? ""))}</td>`;
+            return `<td><input type="text" value="${escapeHtml(String(r[c] ?? ""))}" id="dbEdit_${c}" style="width:100%;min-width:100px;" /></td>`;
+          }).join("")}
+          <td style="white-space:nowrap;">
+            <button class="btn-sm add" onclick="saveDbRow('${escapeHtml(String(pkVal))}')">儲存</button>
+            <button class="btn-sm" onclick="_db.editingPk=null; renderDbTable();">取消</button>
+          </td>
+        </tr>`;
+      }
+      return `<tr>
+          ${cols.map(c => `<td class="mono" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(String(r[c] ?? "—"))}</td>`).join("")}
+          <td style="white-space:nowrap;">
+            ${pk ? `<button class="btn-sm" onclick="_db.editingPk='${escapeHtml(String(pkVal))}'; renderDbTable();">編輯</button>
+            <button class="btn-sm danger" onclick="deleteDbRow('${escapeHtml(String(pkVal))}')">刪除</button>` : '<span class="muted">無主鍵，唯讀</span>'}
+          </td>
+        </tr>`;
+    }).join("")}
+  </tbody></table></div>`;
+}
+
+async function saveDbRow(pkValue){
+  const cols = _db.schema.columns.map(c => c.name).filter(c => c !== _db.schema.primary_key);
+  const values = {};
+  cols.forEach(c => {
+    const el = document.getElementById(`dbEdit_${c}`);
+    if (el) values[c] = el.value;
+  });
+  try {
+    await api(`/api/admin/db/tables/${_db.table}/rows/${encodeURIComponent(pkValue)}`, {
+      method: "PATCH", body: JSON.stringify({values})
+    });
+    toast("已更新", "ok");
+    loadDbRows();
+  } catch(e){ toast(e.message, "err"); }
+}
+async function deleteDbRow(pkValue){
+  if (!confirm(`確定要刪除這筆資料嗎？（主鍵值：${pkValue}）此動作無法復原。`)) return;
+  try {
+    await api(`/api/admin/db/tables/${_db.table}/rows/${encodeURIComponent(pkValue)}`, {method: "DELETE"});
+    toast("已刪除", "ok");
+    loadDbRows();
+  } catch(e){ toast(e.message, "err"); }
+}
+
+function buildDbAddForm(){
+  const pk = _db.schema.primary_key;
+  const fieldsWrap = document.getElementById("dbAddFields");
+  const addableCols = _db.schema.columns.filter(c => !(c.name === pk && c.extra && c.extra.includes("auto_increment")));
+  fieldsWrap.innerHTML = addableCols.map(c => `
+    <div>
+      <label>${escapeHtml(c.name)}${c.nullable === "NO" && !c.col_default ? " *" : ""}</label>
+      <input type="text" id="dbAdd_${c.name}" placeholder="${escapeHtml(c.data_type)}" />
+    </div>
+  `).join("");
+  document.getElementById("dbAddDesc").textContent =
+    `資料表：${_db.table}（標 * 的欄位通常不能留空；主鍵欄位若是自動遞增則不用填）`;
+}
+document.getElementById("dbAddToggleBtn").addEventListener("click", () => {
+  const panel = document.getElementById("dbAddPanel");
+  panel.style.display = panel.style.display === "none" ? "block" : "none";
+});
+document.getElementById("dbAddCancelBtn").addEventListener("click", () => {
+  document.getElementById("dbAddPanel").style.display = "none";
+});
+document.getElementById("dbAddSubmitBtn").addEventListener("click", async () => {
+  const pk = _db.schema.primary_key;
+  const addableCols = _db.schema.columns.filter(c => !(c.name === pk && c.extra && c.extra.includes("auto_increment")));
+  const values = {};
+  addableCols.forEach(c => {
+    const el = document.getElementById(`dbAdd_${c.name}`);
+    if (el && el.value !== "") values[c.name] = el.value;
+  });
+  try {
+    await api(`/api/admin/db/tables/${_db.table}/rows`, {method: "POST", body: JSON.stringify({values})});
+    toast("已新增", "ok");
+    document.getElementById("dbAddPanel").style.display = "none";
+    addableCols.forEach(c => { const el = document.getElementById(`dbAdd_${c.name}`); if (el) el.value = ""; });
+    _db.page = 1;
+    loadDbRows();
+  } catch(e){ toast(e.message, "err"); }
 });
 
 // ---------- 啟動 ----------

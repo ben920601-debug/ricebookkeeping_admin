@@ -662,6 +662,177 @@ def api_admin_clear_errors(admin: str = Depends(require_admin)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ==========================================
+# 🗄️ 資料庫瀏覽器（限定記帳相關表：expenses / orders / order_items / settlements / groups）
+# ------------------------------------------
+# 其他設定類的表（keyword_replies / sensitive_words / bot_settings / error_logs 等）
+# 已經有專屬管理頁面，這裡刻意不開放，避免跟專屬頁面的邏輯打架、也降低誤操作風險。
+# 所有欄位/表名都會先跟 information_schema 對過，才會拼進 SQL 裡，避免注入風險。
+# ==========================================
+DB_BROWSER_ALLOWED_TABLES = ["expenses", "orders", "order_items", "settlements", "groups"]
+
+class DbRowUpsert(BaseModel):
+    values: dict
+
+def _validate_table(table: str) -> str:
+    if table not in DB_BROWSER_ALLOWED_TABLES:
+        raise HTTPException(status_code=403, detail="這張表不開放透過資料庫瀏覽器存取")
+    return table
+
+def _get_table_schema(table: str):
+    """回傳該表的欄位資訊（含哪一欄是主鍵），欄位存在性也順便驗證過"""
+    with db_cursor() as cur:
+        cur.execute(
+            """SELECT COLUMN_NAME AS name, DATA_TYPE AS data_type, IS_NULLABLE AS nullable,
+                      COLUMN_KEY AS col_key, COLUMN_DEFAULT AS col_default, EXTRA AS extra
+               FROM information_schema.columns
+               WHERE table_schema = DATABASE() AND table_name = %s
+               ORDER BY ORDINAL_POSITION""",
+            (table,)
+        )
+        cols = cur.fetchall()
+    if not cols:
+        raise HTTPException(status_code=404, detail="資料庫裡找不到這張表")
+    pk_cols = [c["name"] for c in cols if c["col_key"] == "PRI"]
+    return cols, (pk_cols[0] if pk_cols else None)
+
+def _valid_columns(table: str) -> set:
+    cols, _ = _get_table_schema(table)
+    return {c["name"] for c in cols}
+
+
+@app.get("/api/admin/db/tables")
+def api_db_list_tables(admin: str = Depends(require_admin)):
+    return {"tables": DB_BROWSER_ALLOWED_TABLES}
+
+
+@app.get("/api/admin/db/tables/{table}/schema")
+def api_db_table_schema(table: str, admin: str = Depends(require_admin)):
+    _require_db()
+    table = _validate_table(table)
+    try:
+        cols, pk = _get_table_schema(table)
+        return {"columns": cols, "primary_key": pk}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/db/tables/{table}/rows")
+def api_db_list_rows(
+    table: str,
+    page: int = 1,
+    page_size: int = 25,
+    search: str = "",
+    sort_by: str = "",
+    sort_dir: str = "desc",
+    admin: str = Depends(require_admin),
+):
+    _require_db()
+    table = _validate_table(table)
+    page = max(1, page)
+    page_size = max(1, min(page_size, 200))
+    try:
+        cols, pk = _get_table_schema(table)
+        col_names = [c["name"] for c in cols]
+        sort_col = sort_by if sort_by in col_names else (pk or col_names[0])
+        sort_dir = "ASC" if sort_dir.lower() == "asc" else "DESC"
+
+        where_sql, params = "", []
+        if search.strip():
+            # 只對文字型欄位做模糊搜尋，避免對數字/日期欄位下 LIKE 出現型別錯誤
+            text_cols = [c["name"] for c in cols if c["data_type"] in
+                         ("varchar", "text", "char", "mediumtext", "longtext")]
+            if text_cols:
+                where_sql = "WHERE " + " OR ".join(f"`{c}` LIKE %s" for c in text_cols)
+                params = [f"%{search.strip()}%"] * len(text_cols)
+
+        with db_cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) AS c FROM `{table}` {where_sql}", tuple(params))
+            total = cur.fetchone()["c"]
+
+            offset = (page - 1) * page_size
+            cur.execute(
+                f"SELECT * FROM `{table}` {where_sql} ORDER BY `{sort_col}` {sort_dir} LIMIT %s OFFSET %s",
+                tuple(params) + (page_size, offset)
+            )
+            rows = cur.fetchall()
+
+        for r in rows:
+            for k, v in r.items():
+                if hasattr(v, "isoformat"):
+                    r[k] = v.isoformat()
+
+        return {"rows": rows, "total": total, "page": page, "page_size": page_size, "primary_key": pk}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/admin/db/tables/{table}/rows")
+def api_db_create_row(table: str, body: DbRowUpsert, admin: str = Depends(require_admin)):
+    _require_db()
+    table = _validate_table(table)
+    try:
+        valid_cols = _valid_columns(table)
+        data = {k: v for k, v in body.values.items() if k in valid_cols and v not in (None, "")}
+        if not data:
+            raise HTTPException(status_code=422, detail="沒有可新增的欄位內容")
+        cols_sql = ", ".join(f"`{k}`" for k in data)
+        placeholders = ", ".join(["%s"] * len(data))
+        with db_cursor() as cur:
+            cur.execute(f"INSERT INTO `{table}` ({cols_sql}) VALUES ({placeholders})", tuple(data.values()))
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/admin/db/tables/{table}/rows/{pk_value}")
+def api_db_update_row(table: str, pk_value: str, body: DbRowUpsert, admin: str = Depends(require_admin)):
+    _require_db()
+    table = _validate_table(table)
+    try:
+        cols, pk = _get_table_schema(table)
+        if not pk:
+            raise HTTPException(status_code=400, detail="這張表沒有偵測到主鍵，無法安全地修改單筆資料")
+        valid_cols = {c["name"] for c in cols} - {pk}
+        data = {k: v for k, v in body.values.items() if k in valid_cols}
+        if not data:
+            return {"ok": True}
+        set_sql = ", ".join(f"`{k}`=%s" for k in data)
+        with db_cursor() as cur:
+            cur.execute(
+                f"UPDATE `{table}` SET {set_sql} WHERE `{pk}`=%s LIMIT 1",
+                tuple(data.values()) + (pk_value,)
+            )
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/admin/db/tables/{table}/rows/{pk_value}")
+def api_db_delete_row(table: str, pk_value: str, admin: str = Depends(require_admin)):
+    _require_db()
+    table = _validate_table(table)
+    try:
+        _, pk = _get_table_schema(table)
+        if not pk:
+            raise HTTPException(status_code=400, detail="這張表沒有偵測到主鍵，無法安全地刪除單筆資料")
+        with db_cursor() as cur:
+            cur.execute(f"DELETE FROM `{table}` WHERE `{pk}`=%s LIMIT 1", (pk_value,))
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ---------- 後台網頁本體 ----------
 
 @app.get("/admin")
