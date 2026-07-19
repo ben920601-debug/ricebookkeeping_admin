@@ -297,7 +297,7 @@ def api_admin_status(admin: str = Depends(require_admin)):
     maintenance_message = DEFAULT_MAINTENANCE_MESSAGE
     counts = {"groups": 0, "keyword_replies": 0, "sensitive_words": 0, "unresolved_errors": 0}
     usage = {"active_entities": 0, "total_entities": 0, "usage_rate": None}
-    activity_today = {"replies": 0, "sensitive_blocks": 0}
+    activity_today = {"replies": 0, "sensitive_blocks": 0, "pushes": 0}
 
     if db_ok:
         try:
@@ -316,7 +316,7 @@ def api_admin_status(admin: str = Depends(require_admin)):
                 cur.execute("SELECT COUNT(*) AS c FROM error_logs WHERE created_at >= NOW() - INTERVAL 24 HOUR")
                 counts["unresolved_errors"] = cur.fetchone()["c"]
 
-                # 今日活動量：回覆則數、敏感詞攔截則數
+                # 今日活動量：回覆則數、敏感詞攔截則數、主動推播則數（例如行程提醒）
                 cur.execute(
                     "SELECT event_type, COUNT(*) AS c FROM stat_events "
                     "WHERE created_at >= CURDATE() GROUP BY event_type"
@@ -326,6 +326,8 @@ def api_admin_status(admin: str = Depends(require_admin)):
                         activity_today["replies"] = r["c"]
                     elif r["event_type"] == "sensitive_block":
                         activity_today["sensitive_blocks"] = r["c"]
+                    elif r["event_type"] == "push":
+                        activity_today["pushes"] = r["c"]
 
                 # 使用率：近 7 天有記帳/開團活動的群組＋個人，佔「曾經使用過」總數的比例
                 cur.execute("SELECT COUNT(*) AS c FROM `groups`")
@@ -630,6 +632,145 @@ def api_admin_broadcast(body: BroadcastRequest, admin: str = Depends(require_adm
     return {"ok": True}
 
 
+# ==========================================
+# 🧪 測試限定功能管理（行程模式／群組團單／收據辨識）
+# ------------------------------------------
+# 這三個功能在 bot 端是用共用密碼 + 效期開通的（TEST_MODE_PASSWORD／TEST_MODE_HOURS），
+# 這裡讓你不用密碼流程，也能直接看誰開通了、手動開通/延長/撤銷。
+# ==========================================
+TEST_FEATURE_LABELS = {
+    "itinerary": "行程模式",
+    "group_split": "群組團單",
+    "receipt_ocr": "收據辨識",
+}
+
+class TestModeGrant(BaseModel):
+    owner_type: str  # 'user' | 'group'
+    owner_id: str
+    feature: str      # 'itinerary' | 'group_split' | 'receipt_ocr'
+    hours: int = 16
+
+class TestModeExtend(BaseModel):
+    hours: int = 16
+
+def _validate_feature(feature: str) -> str:
+    if feature not in TEST_FEATURE_LABELS:
+        raise HTTPException(status_code=422, detail="未知的功能代碼")
+    return feature
+
+
+@app.get("/api/admin/test-mode/sessions")
+def api_test_mode_list(admin: str = Depends(require_admin)):
+    """列出所有測試模式授權（含已過期的，前端會標示狀態），依到期時間新到舊排序"""
+    _require_db()
+    try:
+        with db_cursor() as cur:
+            cur.execute(
+                "SELECT owner_type, owner_id, feature, expires_at FROM test_mode_sessions "
+                "ORDER BY expires_at DESC"
+            )
+            rows = cur.fetchall()
+        now = datetime.now()
+        for r in rows:
+            r["feature_label"] = TEST_FEATURE_LABELS.get(r["feature"], r["feature"])
+            r["active"] = r["expires_at"] > now
+            r["expires_at"] = r["expires_at"].isoformat()
+        return rows
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/test-mode/pending")
+def api_test_mode_pending(admin: str = Depends(require_admin)):
+    """列出目前正在等待輸入密碼的請求（超過 5 分鐘 bot 端會自動視為過期，這裡單純顯示原始紀錄）"""
+    _require_db()
+    try:
+        with db_cursor() as cur:
+            cur.execute(
+                "SELECT owner_type, owner_id, feature, requested_at FROM test_mode_pending "
+                "ORDER BY requested_at DESC"
+            )
+            rows = cur.fetchall()
+        for r in rows:
+            r["feature_label"] = TEST_FEATURE_LABELS.get(r["feature"], r["feature"])
+            r["requested_at"] = r["requested_at"].isoformat()
+        return rows
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/admin/test-mode/pending/{owner_type}/{owner_id}")
+def api_test_mode_clear_pending(owner_type: str, owner_id: str, admin: str = Depends(require_admin)):
+    _require_db()
+    try:
+        with db_cursor() as cur:
+            cur.execute(
+                "DELETE FROM test_mode_pending WHERE owner_type=%s AND owner_id=%s",
+                (owner_type, owner_id)
+            )
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/admin/test-mode/grant")
+def api_test_mode_grant(body: TestModeGrant, admin: str = Depends(require_admin)):
+    """手動開通（略過密碼流程），常用於幫忙測試或臨時授權"""
+    _require_db()
+    feature = _validate_feature(body.feature)
+    if body.owner_type not in ("user", "group"):
+        raise HTTPException(status_code=422, detail="owner_type 只能是 user 或 group")
+    if body.hours <= 0 or body.hours > 24 * 30:
+        raise HTTPException(status_code=422, detail="開通時數請填 1～720（30天）之間")
+    try:
+        expires = datetime.now() + timedelta(hours=body.hours)
+        with db_cursor() as cur:
+            cur.execute(
+                """INSERT INTO test_mode_sessions (owner_type, owner_id, feature, expires_at)
+                   VALUES (%s, %s, %s, %s)
+                   ON DUPLICATE KEY UPDATE expires_at=VALUES(expires_at)""",
+                (body.owner_type, body.owner_id, feature, expires)
+            )
+        return {"ok": True, "expires_at": expires.isoformat()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/admin/test-mode/sessions/{owner_type}/{owner_id}/{feature}")
+def api_test_mode_extend(owner_type: str, owner_id: str, feature: str, body: TestModeExtend, admin: str = Depends(require_admin)):
+    """延長效期：以現在時間 + hours 重新計算到期時間（不是在原本效期上累加）"""
+    _require_db()
+    feature = _validate_feature(feature)
+    if body.hours <= 0 or body.hours > 24 * 30:
+        raise HTTPException(status_code=422, detail="延長時數請填 1～720（30天）之間")
+    try:
+        expires = datetime.now() + timedelta(hours=body.hours)
+        with db_cursor() as cur:
+            cur.execute(
+                "UPDATE test_mode_sessions SET expires_at=%s WHERE owner_type=%s AND owner_id=%s AND feature=%s",
+                (expires, owner_type, owner_id, feature)
+            )
+        return {"ok": True, "expires_at": expires.isoformat()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/admin/test-mode/sessions/{owner_type}/{owner_id}/{feature}")
+def api_test_mode_revoke(owner_type: str, owner_id: str, feature: str, admin: str = Depends(require_admin)):
+    """撤銷：直接刪除該筆授權，等同立刻恢復未開通狀態"""
+    _require_db()
+    feature = _validate_feature(feature)
+    try:
+        with db_cursor() as cur:
+            cur.execute(
+                "DELETE FROM test_mode_sessions WHERE owner_type=%s AND owner_id=%s AND feature=%s",
+                (owner_type, owner_id, feature)
+            )
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ---------- 錯誤紀錄監控 ----------
 
 @app.get("/api/admin/errors")
@@ -669,7 +810,10 @@ def api_admin_clear_errors(admin: str = Depends(require_admin)):
 # 已經有專屬管理頁面，這裡刻意不開放，避免跟專屬頁面的邏輯打架、也降低誤操作風險。
 # 所有欄位/表名都會先跟 information_schema 對過，才會拼進 SQL 裡，避免注入風險。
 # ==========================================
-DB_BROWSER_ALLOWED_TABLES = ["expenses", "orders", "order_items", "settlements", "groups"]
+DB_BROWSER_ALLOWED_TABLES = [
+    "expenses", "orders", "order_items", "settlements", "groups",
+    "itineraries", "test_mode_sessions", "test_mode_pending", "pending_itinerary_confirm",
+]
 
 class DbRowUpsert(BaseModel):
     values: dict

@@ -210,6 +210,7 @@
       <button class="nav-item" data-tab="sensitive">🚫　敏感詞</button>
       <button class="nav-item" data-tab="groups">👥　群組管理</button>
       <button class="nav-item" data-tab="broadcast">📣　群組廣播</button>
+      <button class="nav-item" data-tab="testmode">🧪　測試功能</button>
       <button class="nav-item" data-tab="dbbrowser">🗄️　資料瀏覽</button>
       <button class="nav-item" data-tab="errors">🧾　錯誤紀錄</button>
       <div class="sidebar-bottom">
@@ -323,6 +324,41 @@
             <textarea id="bcMessageInput" placeholder="要發送的訊息內容…"></textarea>
           </div>
           <button class="btn-sm add" id="bcSendBtn">發送</button>
+        </div>
+      </div>
+
+      <!-- 測試功能 -->
+      <div class="section" id="tab-testmode">
+        <div class="panel">
+          <h2>手動開通</h2>
+          <p class="desc">略過密碼流程，直接幫某個人/群組開通「行程模式」「群組團單」或「收據辨識」測試功能。</p>
+          <div class="form-row">
+            <select id="tmOwnerType" class="table-select" style="min-width:100px;">
+              <option value="user">個人（user）</option>
+              <option value="group">群組（group）</option>
+            </select>
+            <input type="text" id="tmOwnerId" placeholder="user_id 或 group_id" style="min-width:220px;" />
+            <select id="tmFeature" class="table-select" style="min-width:140px;">
+              <option value="itinerary">行程模式</option>
+              <option value="group_split">群組團單</option>
+              <option value="receipt_ocr">收據辨識</option>
+            </select>
+            <input type="number" id="tmHours" value="16" min="1" max="720" style="width:90px;" />
+            <span class="muted" style="align-self:center;font-size:12.5px;">小時</span>
+            <button class="btn-sm add" id="tmGrantBtn">開通</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2 style="display:flex;align-items:center;justify-content:space-between;">
+            <span>目前授權列表</span>
+            <button class="refresh-link" id="tmRefreshBtn">重新整理</button>
+          </h2>
+          <div id="tmSessionsWrap"><p class="empty">讀取中…</p></div>
+        </div>
+        <div class="panel">
+          <h2>等待輸入密碼中</h2>
+          <p class="desc">超過 5 分鐘 bot 端會自動視為過期；這裡列出的是尚未過期或尚未清除的原始紀錄。</p>
+          <div id="tmPendingWrap"><p class="empty">讀取中…</p></div>
         </div>
       </div>
 
@@ -450,7 +486,7 @@ function logout(){
 document.getElementById("logoutBtn").addEventListener("click", logout);
 
 // ---------- 分頁切換 ----------
-const titles = {dashboard:"總覽", switch:"機器人開關", keywords:"關鍵字回覆", sensitive:"敏感詞", groups:"群組管理", broadcast:"群組廣播", dbbrowser:"資料瀏覽", errors:"錯誤紀錄"};
+const titles = {dashboard:"總覽", switch:"機器人開關", keywords:"關鍵字回覆", sensitive:"敏感詞", groups:"群組管理", broadcast:"群組廣播", testmode:"測試功能", dbbrowser:"資料瀏覽", errors:"錯誤紀錄"};
 document.querySelectorAll(".nav-item").forEach(btn => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
@@ -469,6 +505,7 @@ function loadTab(tab){
   if (tab === "sensitive") loadSensitive();
   if (tab === "groups") loadGroups();
   if (tab === "broadcast") loadBroadcastTargets();
+  if (tab === "testmode") loadTestMode();
   if (tab === "dbbrowser") loadDbBrowserInit();
   if (tab === "errors") loadErrors();
 }
@@ -491,6 +528,7 @@ async function loadDashboard(){
       <div class="card"><div class="num">${friendText}</div><div class="label">好友數（約1天延遲）</div></div>
       <div class="card"><div class="num">${usageText}</div><div class="label">使用率（近7天活躍佔比）</div></div>
       <div class="card"><div class="num">${s.activity_today.replies}</div><div class="label">今日回覆則數</div></div>
+      <div class="card"><div class="num">${s.activity_today.pushes || 0}</div><div class="label">今日推播則數</div></div>
       <div class="card"><div class="num">${s.activity_today.sensitive_blocks}</div><div class="label">今日敏感詞觸發</div></div>
       <div class="card"><div class="num">${s.counts.unresolved_errors}</div><div class="label">近24小時錯誤</div></div>
       <div class="card"><div class="num">${s.counts.groups}</div><div class="label">群組總數</div></div>
@@ -757,6 +795,90 @@ document.getElementById("errClearBtn").addEventListener("click", async () => {
   try { await api("/api/admin/errors", {method:"DELETE"}); toast("已清空", "ok"); loadErrors(); }
   catch(e){ toast(e.message, "err"); }
 });
+
+// ---------- 測試功能管理 ----------
+async function loadTestMode(){
+  await Promise.all([loadTestModeSessions(), loadTestModePending()]);
+}
+async function loadTestModeSessions(){
+  const wrap = document.getElementById("tmSessionsWrap");
+  try {
+    const rows = await api("/api/admin/test-mode/sessions");
+    if (!rows.length){ wrap.innerHTML = '<p class="empty">目前沒有任何授權紀錄</p>'; return; }
+    wrap.innerHTML = `<table><thead><tr><th>類型</th><th>ID</th><th>功能</th><th>到期時間</th><th>狀態</th><th></th></tr></thead><tbody>
+      ${rows.map(r => `
+        <tr>
+          <td class="mono">${escapeHtml(r.owner_type)}</td>
+          <td class="mono">${escapeHtml(r.owner_id)}</td>
+          <td>${escapeHtml(r.feature_label)}</td>
+          <td class="mono muted">${escapeHtml((r.expires_at||"").replace("T"," ").slice(0,19))}</td>
+          <td><span class="badge ${r.active ? 'normal' : 'settle'}">${r.active ? '生效中' : '已過期'}</span></td>
+          <td style="white-space:nowrap;">
+            <input type="number" min="1" max="720" value="16" id="ext_${r.owner_type}_${r.owner_id}_${r.feature}" style="width:60px;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:5px;" />
+            <button class="btn-sm" onclick="extendTestMode('${escapeHtml(r.owner_type)}','${escapeHtml(r.owner_id)}','${r.feature}')">延長</button>
+            <button class="btn-sm danger" onclick="revokeTestMode('${escapeHtml(r.owner_type)}','${escapeHtml(r.owner_id)}','${r.feature}')">撤銷</button>
+          </td>
+        </tr>`).join("")}
+    </tbody></table>`;
+  } catch(e){ wrap.innerHTML = '<p class="empty">讀取失敗</p>'; toast(e.message, "err"); }
+}
+async function loadTestModePending(){
+  const wrap = document.getElementById("tmPendingWrap");
+  try {
+    const rows = await api("/api/admin/test-mode/pending");
+    if (!rows.length){ wrap.innerHTML = '<p class="empty">目前沒有等待中的請求</p>'; return; }
+    wrap.innerHTML = `<table><thead><tr><th>類型</th><th>ID</th><th>功能</th><th>請求時間</th><th></th></tr></thead><tbody>
+      ${rows.map(r => `
+        <tr>
+          <td class="mono">${escapeHtml(r.owner_type)}</td>
+          <td class="mono">${escapeHtml(r.owner_id)}</td>
+          <td>${escapeHtml(r.feature_label)}</td>
+          <td class="mono muted">${escapeHtml((r.requested_at||"").replace("T"," ").slice(0,19))}</td>
+          <td><button class="btn-sm danger" onclick="clearTestModePending('${escapeHtml(r.owner_type)}','${escapeHtml(r.owner_id)}')">清除</button></td>
+        </tr>`).join("")}
+    </tbody></table>`;
+  } catch(e){ wrap.innerHTML = '<p class="empty">讀取失敗</p>'; toast(e.message, "err"); }
+}
+document.getElementById("tmRefreshBtn").addEventListener("click", loadTestMode);
+document.getElementById("tmGrantBtn").addEventListener("click", async () => {
+  const owner_type = document.getElementById("tmOwnerType").value;
+  const owner_id = document.getElementById("tmOwnerId").value.trim();
+  const feature = document.getElementById("tmFeature").value;
+  const hours = parseInt(document.getElementById("tmHours").value, 10) || 16;
+  if (!owner_id) return toast("請輸入 user_id 或 group_id", "err");
+  try {
+    await api("/api/admin/test-mode/grant", {method:"POST", body: JSON.stringify({owner_type, owner_id, feature, hours})});
+    toast("已開通", "ok");
+    document.getElementById("tmOwnerId").value = "";
+    loadTestModeSessions();
+  } catch(e){ toast(e.message, "err"); }
+});
+async function extendTestMode(ownerType, ownerId, feature){
+  const input = document.getElementById(`ext_${ownerType}_${ownerId}_${feature}`);
+  const hours = parseInt(input.value, 10) || 16;
+  try {
+    await api(`/api/admin/test-mode/sessions/${ownerType}/${encodeURIComponent(ownerId)}/${feature}`, {
+      method: "PATCH", body: JSON.stringify({hours})
+    });
+    toast("已延長", "ok");
+    loadTestModeSessions();
+  } catch(e){ toast(e.message, "err"); }
+}
+async function revokeTestMode(ownerType, ownerId, feature){
+  if (!confirm("確定要撤銷這筆授權嗎？")) return;
+  try {
+    await api(`/api/admin/test-mode/sessions/${ownerType}/${encodeURIComponent(ownerId)}/${feature}`, {method: "DELETE"});
+    toast("已撤銷", "ok");
+    loadTestModeSessions();
+  } catch(e){ toast(e.message, "err"); }
+}
+async function clearTestModePending(ownerType, ownerId){
+  try {
+    await api(`/api/admin/test-mode/pending/${ownerType}/${encodeURIComponent(ownerId)}`, {method: "DELETE"});
+    toast("已清除", "ok");
+    loadTestModePending();
+  } catch(e){ toast(e.message, "err"); }
+}
 
 // ---------- 資料瀏覽器 ----------
 let _db = {
