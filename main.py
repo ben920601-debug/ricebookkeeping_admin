@@ -567,17 +567,22 @@ def api_admin_reset_group(group_id: str, admin: str = Depends(require_admin)):
 
 @app.get("/api/admin/broadcast-targets")
 def api_admin_broadcast_targets(admin: str = Depends(require_admin)):
-    """列出曾經在「個人聊天」跟機器人互動過的使用者（owner_type='user'），供廣播訊息選擇對象"""
+    """列出可能可以發送私訊的使用者：包含個人聊天記帳過的人，也包含只在群組互動過、
+    有被快取到 group_members 名冊裡的人（LINE 只要對方加過官方帳號好友，group_id 場景也能推播）"""
     _require_db()
     try:
         with db_cursor() as cur:
             cur.execute(
-                """SELECT owner_id AS user_id, MAX(created_by_name) AS name, MAX(created_at) AS last_active
-                   FROM expenses
-                   WHERE owner_type='user'
-                   GROUP BY owner_id
+                """SELECT user_id, MAX(name) AS name, MAX(last_active) AS last_active FROM (
+                       SELECT owner_id AS user_id, created_by_name AS name, created_at AS last_active
+                       FROM expenses WHERE owner_type='user'
+                       UNION ALL
+                       SELECT user_id, display_name AS name, NULL AS last_active
+                       FROM group_members
+                   ) combined
+                   GROUP BY user_id
                    ORDER BY last_active DESC
-                   LIMIT 200"""
+                   LIMIT 300"""
             )
             rows = cur.fetchall()
         for r in rows:
@@ -639,7 +644,7 @@ def api_admin_broadcast(body: BroadcastRequest, admin: str = Depends(require_adm
 # 這裡讓你不用密碼流程，也能直接看誰開通了、手動開通/延長/撤銷。
 # ==========================================
 TEST_FEATURE_LABELS = {
-    "itinerary": "行程模式",
+    "itinerary": "旅行模式",
     "group_split": "群組團單",
     "receipt_ocr": "收據辨識",
 }
@@ -813,6 +818,7 @@ def api_admin_clear_errors(admin: str = Depends(require_admin)):
 DB_BROWSER_ALLOWED_TABLES = [
     "expenses", "orders", "order_items", "settlements", "groups",
     "itineraries", "test_mode_sessions", "test_mode_pending", "pending_itinerary_confirm",
+    "group_members", "trip_sessions", "trips", "pending_group_expense",
 ]
 
 class DbRowUpsert(BaseModel):
