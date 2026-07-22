@@ -261,6 +261,14 @@
           <button class="btn-sm add" id="maintenanceSaveBtn">儲存訊息</button>
           <button class="btn-sm" id="switchRefreshBtn" style="margin-left:8px;">重新查詢目前狀態</button>
         </div>
+        <div class="panel">
+          <h2>AI 人格設定</h2>
+          <p class="desc">影響機器人在自然語言對話（記帳以外的閒聊、AI 萃取記帳的回覆語氣）時的人設與說話方式。設定變更最慢 5 秒內會自動生效，不用重啟 bot 服務。</p>
+          <div class="form-row">
+            <textarea id="aiPersonaInput" placeholder="你是一個親切、幽默的記帳助理「記帳米粒」。"></textarea>
+          </div>
+          <button class="btn-sm add" id="aiPersonaSaveBtn">儲存人格設定</button>
+        </div>
       </div>
 
       <!-- 關鍵字回覆 -->
@@ -286,7 +294,7 @@
       <div class="section" id="tab-sensitive">
         <div class="panel">
           <h2>新增敏感詞</h2>
-          <p class="desc">訊息中若出現敏感詞，機器人會回覆制式拒答訊息，不會進到記帳/AI 流程。</p>
+          <p class="desc">機器人不再只是單純比對訊息裡有沒有出現這個詞，而是把「敏感詞＋細項說明」一起交給 AI 判斷語意是否符合（換句話說、隱晦講法等變形也判斷得出來）。命中就回覆制式拒答訊息，不會進到記帳/AI 流程。細項說明請盡量寫清楚情境，AI 判斷會更準確。</p>
           <div class="form-row">
             <input type="text" id="swInput" placeholder="敏感詞，例如：賭博" style="min-width:200px;" />
           </div>
@@ -331,7 +339,7 @@
       <div class="section" id="tab-testmode">
         <div class="panel">
           <h2>手動開通</h2>
-          <p class="desc">略過密碼流程，直接幫某個人/群組開通「行程模式」「群組團單」或「收據辨識」測試功能。</p>
+          <p class="desc">略過密碼流程，直接幫某個人/群組開通「旅行模式」或「收據辨識」測試功能。（群組團單分攤已下放為群組主要功能，永遠開啟，不需要在這裡開通）</p>
           <div class="form-row">
             <select id="tmOwnerType" class="table-select" style="min-width:100px;">
               <option value="user">個人（user）</option>
@@ -339,8 +347,7 @@
             </select>
             <input type="text" id="tmOwnerId" placeholder="user_id 或 group_id" style="min-width:220px;" />
             <select id="tmFeature" class="table-select" style="min-width:140px;">
-              <option value="itinerary">行程模式</option>
-              <option value="group_split">群組團單</option>
+              <option value="itinerary">旅行模式</option>
               <option value="receipt_ocr">收據辨識</option>
             </select>
             <input type="number" id="tmHours" value="16" min="1" max="720" style="width:90px;" />
@@ -550,6 +557,7 @@ async function loadSwitch(){
     input.checked = s.bot_enabled;
     document.getElementById("switchHint").textContent = s.bot_enabled ? "目前正常回應訊息" : "目前回覆維護訊息中";
     document.getElementById("maintenanceMsgInput").value = s.maintenance_message || "";
+    document.getElementById("aiPersonaInput").value = s.ai_persona || "";
     updateStatusPill(s.bot_enabled);
   } catch(e){ toast(e.message, "err"); }
 }
@@ -571,6 +579,14 @@ document.getElementById("maintenanceSaveBtn").addEventListener("click", async ()
     const enabled = document.getElementById("botSwitchInput").checked;
     await api("/api/admin/bot-switch", {method:"POST", body: JSON.stringify({enabled, maintenance_message: msg})});
     toast("已儲存維護訊息", "ok");
+  } catch(e){ toast(e.message, "err"); }
+});
+document.getElementById("aiPersonaSaveBtn").addEventListener("click", async () => {
+  const persona = document.getElementById("aiPersonaInput").value.trim();
+  if (!persona) return toast("人格描述不能空白", "err");
+  try {
+    await api("/api/admin/ai-persona", {method:"POST", body: JSON.stringify({ai_persona: persona})});
+    toast("已儲存 AI 人格設定（bot 端最慢 5 秒內生效）", "ok");
   } catch(e){ toast(e.message, "err"); }
 });
 document.getElementById("switchRefreshBtn").addEventListener("click", () => {

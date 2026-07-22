@@ -46,6 +46,7 @@ os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 app = FastAPI(title="記帳米粒 ｜ 中控後台")
 
 DEFAULT_MAINTENANCE_MESSAGE = "🤖 系統維護中，請稍後再試。"
+DEFAULT_AI_PERSONA = "你是一個親切、幽默的記帳助理「記帳米粒」。"
 
 app.add_middleware(
     CORSMiddleware,
@@ -240,7 +241,10 @@ class AdminLoginRequest(BaseModel):
 
 class BotSwitchUpdate(BaseModel):
     enabled: bool
-    maintenance_message: Optional[str] = None  # 關閉時要回覆給使用者的訊息，不填則沿用現有設定
+    maintenance_message: Optional[str] = None
+
+class AiPersonaUpdate(BaseModel):
+    ai_persona: str  # 關閉時要回覆給使用者的訊息，不填則沿用現有設定
 
 class KeywordReplyCreate(BaseModel):
     keyword: str
@@ -295,6 +299,7 @@ def api_admin_status(admin: str = Depends(require_admin)):
 
     bot_enabled = True
     maintenance_message = DEFAULT_MAINTENANCE_MESSAGE
+    ai_persona = DEFAULT_AI_PERSONA
     counts = {"groups": 0, "keyword_replies": 0, "sensitive_words": 0, "unresolved_errors": 0}
     usage = {"active_entities": 0, "total_entities": 0, "usage_rate": None}
     activity_today = {"replies": 0, "sensitive_blocks": 0, "pushes": 0}
@@ -302,10 +307,11 @@ def api_admin_status(admin: str = Depends(require_admin)):
     if db_ok:
         try:
             with db_cursor() as cur:
-                cur.execute("SELECT `key`, `value` FROM bot_settings WHERE `key` IN ('bot_enabled', 'maintenance_message')")
+                cur.execute("SELECT `key`, `value` FROM bot_settings WHERE `key` IN ('bot_enabled', 'maintenance_message', 'ai_persona')")
                 settings_rows = {r["key"]: r["value"] for r in cur.fetchall()}
                 bot_enabled = settings_rows.get("bot_enabled", "1") == "1"
                 maintenance_message = settings_rows.get("maintenance_message") or DEFAULT_MAINTENANCE_MESSAGE
+                ai_persona = settings_rows.get("ai_persona") or DEFAULT_AI_PERSONA
 
                 cur.execute("SELECT COUNT(*) AS c FROM `groups`")
                 counts["groups"] = cur.fetchone()["c"]
@@ -356,6 +362,7 @@ def api_admin_status(admin: str = Depends(require_admin)):
     return {
         "bot_enabled": bot_enabled,
         "maintenance_message": maintenance_message,
+        "ai_persona": ai_persona,
         "db_ready": DB_READY,
         "db_pool_ok": db_ok,
         "db_pool_error": db_error,
@@ -385,6 +392,38 @@ def api_admin_bot_switch(body: BotSwitchUpdate, admin: str = Depends(require_adm
                     (body.maintenance_message,)
                 )
         return {"ok": True, "bot_enabled": body.enabled}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/ai-persona")
+def api_get_ai_persona(admin: str = Depends(require_admin)):
+    """讀取目前的 AI 人格設定（bot_settings.ai_persona），影響機器人在自然語言對話時的語氣與人設"""
+    _require_db()
+    try:
+        with db_cursor() as cur:
+            cur.execute("SELECT `value` FROM bot_settings WHERE `key`='ai_persona'")
+            row = cur.fetchone()
+        return {"ai_persona": (row["value"] if row and row["value"] else DEFAULT_AI_PERSONA)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/admin/ai-persona")
+def api_set_ai_persona(body: AiPersonaUpdate, admin: str = Depends(require_admin)):
+    """更新 AI 人格設定；LINE bot 端最多 5 秒後快取會讀到最新值，不用重啟 bot 服務"""
+    _require_db()
+    text = body.ai_persona.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="人格描述不能是空白")
+    try:
+        with db_cursor() as cur:
+            cur.execute(
+                "INSERT INTO bot_settings (`key`, `value`) VALUES ('ai_persona', %s) "
+                "ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)",
+                (text,)
+            )
+        return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -638,21 +677,21 @@ def api_admin_broadcast(body: BroadcastRequest, admin: str = Depends(require_adm
 
 
 # ==========================================
-# 🧪 測試限定功能管理（行程模式／群組團單／收據辨識）
+# 🧪 測試限定功能管理（旅行模式／收據辨識）
 # ------------------------------------------
-# 這三個功能在 bot 端是用共用密碼 + 效期開通的（TEST_MODE_PASSWORD／TEST_MODE_HOURS），
+# 這兩個功能在 bot 端是用共用密碼 + 效期開通的（TEST_MODE_PASSWORD／TEST_MODE_HOURS），
 # 這裡讓你不用密碼流程，也能直接看誰開通了、手動開通/延長/撤銷。
+# （群組團單分攤已於 V1.7 下放為群組主要功能，不再需要密碼開通，因此不在這份清單裡）
 # ==========================================
 TEST_FEATURE_LABELS = {
     "itinerary": "旅行模式",
-    "group_split": "群組團單",
     "receipt_ocr": "收據辨識",
 }
 
 class TestModeGrant(BaseModel):
     owner_type: str  # 'user' | 'group'
     owner_id: str
-    feature: str      # 'itinerary' | 'group_split' | 'receipt_ocr'
+    feature: str      # 'itinerary' | 'receipt_ocr'
     hours: int = 16
 
 class TestModeExtend(BaseModel):
