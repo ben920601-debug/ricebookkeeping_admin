@@ -25,7 +25,7 @@ import certifi
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
@@ -303,7 +303,7 @@ def api_admin_status(admin: str = Depends(require_admin)):
     ai_persona = DEFAULT_AI_PERSONA
     counts = {"groups": 0, "keyword_replies": 0, "sensitive_words": 0, "unresolved_errors": 0}
     usage = {"active_entities": 0, "total_entities": 0, "usage_rate": None}
-    activity_today = {"replies": 0, "sensitive_blocks": 0, "pushes": 0}
+    activity_today = {"replies": 0, "sensitive_blocks": 0, "pushes": 0, "gemini_replies": 0, "python_replies": 0, "gemini_ratio": None}
 
     if db_ok:
         try:
@@ -335,6 +335,14 @@ def api_admin_status(admin: str = Depends(require_admin)):
                         activity_today["sensitive_blocks"] = r["c"]
                     elif r["event_type"] == "push":
                         activity_today["pushes"] = r["c"]
+                    elif r["event_type"] == "gemini_reply":
+                        activity_today["gemini_replies"] = r["c"]
+                    elif r["event_type"] == "python_reply":
+                        activity_today["python_replies"] = r["c"]
+
+                _total_routed = activity_today["gemini_replies"] + activity_today["python_replies"]
+                if _total_routed > 0:
+                    activity_today["gemini_ratio"] = round(activity_today["gemini_replies"] / _total_routed * 100, 1)
 
                 # 使用率：近 7 天有記帳/開團活動的群組＋個人，佔「曾經使用過」總數的比例
                 cur.execute("SELECT COUNT(*) AS c FROM `groups`")
@@ -1084,6 +1092,8 @@ class DashboardSettingsUpdate(BaseModel):
     dashboard_enabled: Optional[bool] = None
     marquee_enabled: Optional[bool] = None
     marquee_text: Optional[str] = None
+    marquee_color: Optional[str] = None
+    marquee_speed_seconds: Optional[int] = None
 
 @app.get("/api/admin/dashboard-settings")
 def api_get_dashboard_settings(admin: str = Depends(require_admin)):
@@ -1092,13 +1102,15 @@ def api_get_dashboard_settings(admin: str = Depends(require_admin)):
         with db_cursor() as cur:
             cur.execute(
                 "SELECT `key`, `value` FROM bot_settings WHERE `key` IN "
-                "('dashboard_enabled', 'marquee_enabled', 'marquee_text')"
+                "('dashboard_enabled', 'marquee_enabled', 'marquee_text', 'marquee_color', 'marquee_speed_seconds')"
             )
             s = {r["key"]: r["value"] for r in cur.fetchall()}
         return {
             "dashboard_enabled": s.get("dashboard_enabled", "1") == "1",
             "marquee_enabled": s.get("marquee_enabled", "0") == "1",
             "marquee_text": s.get("marquee_text") or "",
+            "marquee_color": s.get("marquee_color") or "#F59E0B",
+            "marquee_speed_seconds": int(s.get("marquee_speed_seconds") or 18),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1126,9 +1138,50 @@ def api_update_dashboard_settings(body: DashboardSettingsUpdate, admin: str = De
                     "ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)",
                     (body.marquee_text,)
                 )
+            if body.marquee_color is not None:
+                cur.execute(
+                    "INSERT INTO bot_settings (`key`,`value`) VALUES ('marquee_color', %s) "
+                    "ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)",
+                    (body.marquee_color,)
+                )
+            if body.marquee_speed_seconds is not None:
+                cur.execute(
+                    "INSERT INTO bot_settings (`key`,`value`) VALUES ('marquee_speed_seconds', %s) "
+                    "ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)",
+                    (str(body.marquee_speed_seconds),)
+                )
         return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================
+# 🔐 監控後台的維護中／Beta 功能密碼閘門
+# ------------------------------------------
+# 密碼與中控台登入密碼相同（直接重用 verify_password），
+# 這裡刻意不需要 JWT，因為呼叫方是一般使用者（index.html），
+# 只回傳 True/False，不會洩漏密碼本身。用簡易的記憶體節流
+# 擋掉暴力猜測（同一個來源 10 秒內最多試 3 次）。
+# ==========================================
+_gate_attempts = {}  # {client_ip: [timestamp, ...]}
+GATE_RATE_LIMIT_WINDOW = 10
+GATE_RATE_LIMIT_MAX = 3
+
+class GatePasswordCheck(BaseModel):
+    password: str
+
+@app.post("/api/admin/verify-gate-password")
+def api_verify_gate_password(body: GatePasswordCheck, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    attempts = [t for t in _gate_attempts.get(client_ip, []) if now - t < GATE_RATE_LIMIT_WINDOW]
+    if len(attempts) >= GATE_RATE_LIMIT_MAX:
+        raise HTTPException(status_code=429, detail="嘗試次數過多，請稍後再試")
+    attempts.append(now)
+    _gate_attempts[client_ip] = attempts
+
+    ok = verify_password(body.password)
+    return {"ok": ok}
 
 
 class AlertSettingsUpdate(BaseModel):

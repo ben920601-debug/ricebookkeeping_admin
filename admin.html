@@ -291,7 +291,7 @@
 
         <div class="panel">
           <h2>📢 跑馬燈</h2>
-          <p class="desc">開啟後會在個人監控後台最上方顯示一條跑馬燈文字，方便您隨時公告（例如：「今晚 11 點系統維護」）。設定變更最慢 5 秒內生效。</p>
+          <p class="desc">開啟後會在個人監控後台「名字下方」顯示一條跑馬燈文字，背景會跟頁面融為一體（不是色塊），方便您隨時公告（例如：「今晚 11 點系統維護」）。使用者端最慢 30 秒內會自動偵測到設定變更並套用。</p>
           <div class="switch-row">
             <div class="txt"><strong>跑馬燈顯示</strong></div>
             <label class="toggle">
@@ -302,7 +302,17 @@
           <div class="form-row" style="margin-top:10px;">
             <input type="text" id="marqueeTextInput" placeholder="跑馬燈文字內容…" style="min-width:280px;flex:1;" />
           </div>
-          <button class="btn-sm add" id="dashSettingsSaveBtn" style="margin-top:10px;">儲存監控後台設定</button>
+          <div class="form-row" style="margin-top:10px;">
+            <div>
+              <label class="muted" style="font-size:11px;display:block;margin-bottom:4px;">文字顏色</label>
+              <input type="color" id="marqueeColorInput" value="#F59E0B" style="width:60px;height:34px;padding:2px;" />
+            </div>
+            <div>
+              <label class="muted" style="font-size:11px;display:block;margin-bottom:4px;">跑馬速度（秒，數字越小越快）</label>
+              <input type="number" id="marqueeSpeedInput" value="18" min="5" max="60" style="width:90px;" />
+            </div>
+          </div>
+          <button class="btn-sm add" id="dashSettingsSaveBtn" style="margin-top:10px;">儲存跑馬燈設定</button>
         </div>
 
         <div class="panel">
@@ -592,12 +602,14 @@ async function loadDashboard(){
     updateStatusPill(s.bot_enabled);
     const usageText = s.usage.usage_rate === null ? "—" : s.usage.usage_rate + "%";
     const friendText = s.friend_count === null || s.friend_count === undefined ? "—" : s.friend_count;
+    const ratioText = s.activity_today.gemini_ratio === null ? "—" : s.activity_today.gemini_ratio + "%";
     document.getElementById("dashboardCards").innerHTML = `
       <div class="card"><div class="num">${friendText}</div><div class="label">好友數（約1天延遲）</div></div>
       <div class="card"><div class="num">${usageText}</div><div class="label">使用率（近7天活躍佔比）</div></div>
       <div class="card"><div class="num">${s.activity_today.replies}</div><div class="label">今日回覆則數</div></div>
       <div class="card"><div class="num">${s.activity_today.pushes || 0}</div><div class="label">今日推播則數</div></div>
       <div class="card"><div class="num">${s.activity_today.sensitive_blocks}</div><div class="label">今日敏感詞觸發</div></div>
+      <div class="card"><div class="num">${ratioText}</div><div class="label">🤖 Gemini 佔比（Gemini ${s.activity_today.gemini_replies} / Python ${s.activity_today.python_replies}）</div></div>
       <div class="card"><div class="num">${s.counts.unresolved_errors}</div><div class="label">近24小時錯誤</div></div>
       <div class="card"><div class="num">${s.counts.groups}</div><div class="label">群組總數</div></div>
       <div class="card"><div class="num">${s.counts.keyword_replies}</div><div class="label">關鍵字回覆</div></div>
@@ -669,8 +681,22 @@ async function loadDashboardSettings() {
     document.getElementById("dashSwitchHint").textContent = s.dashboard_enabled ? "使用者可正常瀏覽" : "目前顯示維護畫面";
     document.getElementById("marqueeEnabledInput").checked = s.marquee_enabled;
     document.getElementById("marqueeTextInput").value = s.marquee_text || "";
+    document.getElementById("marqueeColorInput").value = s.marquee_color || "#F59E0B";
+    document.getElementById("marqueeSpeedInput").value = s.marquee_speed_seconds || 18;
   } catch (e) { toast(e.message, "err"); }
 }
+
+document.getElementById("dashEnabledInput").addEventListener("change", async (e) => {
+  const enabled = e.target.checked;
+  if (!enabled && !confirm("確定要關閉監控後台嗎？關閉後所有使用者從 LINE 點進去都只會看到維護畫面。")) {
+    e.target.checked = true; return;
+  }
+  try {
+    await api("/api/admin/dashboard-settings", { method: "POST", body: JSON.stringify({ dashboard_enabled: enabled }) });
+    document.getElementById("dashSwitchHint").textContent = enabled ? "使用者可正常瀏覽" : "目前顯示維護畫面";
+    toast(enabled ? "監控後台已開啟" : "監控後台已關閉（使用者端最慢30秒內會自動偵測到並顯示維護畫面）", "ok");
+  } catch (err) { toast(err.message, "err"); e.target.checked = !enabled; }
+});
 
 async function loadAlertSettings() {
   try {
@@ -727,12 +753,13 @@ document.getElementById("dashSettingsSaveBtn").addEventListener("click", async (
     await api("/api/admin/dashboard-settings", {
       method: "POST",
       body: JSON.stringify({
-        dashboard_enabled: document.getElementById("dashEnabledInput").checked,
         marquee_enabled: document.getElementById("marqueeEnabledInput").checked,
         marquee_text: document.getElementById("marqueeTextInput").value.trim(),
+        marquee_color: document.getElementById("marqueeColorInput").value,
+        marquee_speed_seconds: parseInt(document.getElementById("marqueeSpeedInput").value, 10) || 18,
       })
     });
-    toast("已儲存監控後台設定", "ok");
+    toast("已儲存跑馬燈設定（使用者端最慢30秒內會自動套用）", "ok");
     loadDashboardSettings();
   } catch (e) { toast(e.message, "err"); }
 });
