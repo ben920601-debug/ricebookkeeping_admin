@@ -15,6 +15,7 @@
   3. 已用 hash_password.py 產生 ADMIN_PASSWORD_HASH 並寫進 .env
 """
 import os
+import asyncio
 import hashlib
 import hmac
 import secrets
@@ -677,21 +678,24 @@ def api_admin_broadcast(body: BroadcastRequest, admin: str = Depends(require_adm
 
 
 # ==========================================
-# 🧪 測試限定功能管理（旅行模式／收據辨識）
+# 🧪 測試限定功能管理（旅行模式／收據辨識／繳費功能／存錢功能／支付方式）
 # ------------------------------------------
-# 這兩個功能在 bot 端是用共用密碼 + 效期開通的（TEST_MODE_PASSWORD／TEST_MODE_HOURS），
+# 這幾個功能在 bot 端是用共用密碼 + 效期開通的（TEST_MODE_PASSWORD／TEST_MODE_HOURS），
 # 這裡讓你不用密碼流程，也能直接看誰開通了、手動開通/延長/撤銷。
 # （群組團單分攤已於 V1.7 下放為群組主要功能，不再需要密碼開通，因此不在這份清單裡）
 # ==========================================
 TEST_FEATURE_LABELS = {
     "itinerary": "旅行模式",
     "receipt_ocr": "收據辨識",
+    "bill_payment": "繳費功能",
+    "savings": "存錢功能",
+    "payment_method": "支付方式",
 }
 
 class TestModeGrant(BaseModel):
     owner_type: str  # 'user' | 'group'
     owner_id: str
-    feature: str      # 'itinerary' | 'receipt_ocr'
+    feature: str      # 'itinerary' | 'receipt_ocr' | 'bill_payment' | 'savings' | 'payment_method'
     hours: int = 16
 
 class TestModeExtend(BaseModel):
@@ -858,6 +862,8 @@ DB_BROWSER_ALLOWED_TABLES = [
     "expenses", "orders", "order_items", "settlements", "groups",
     "itineraries", "test_mode_sessions", "test_mode_pending", "pending_itinerary_confirm",
     "group_members", "trip_sessions", "trips", "pending_group_expense",
+    "pending_receipt_naming", "bills", "bill_payments", "savings_jars",
+    "savings_transactions", "payment_methods",
 ]
 
 class DbRowUpsert(BaseModel):
@@ -1020,6 +1026,228 @@ def api_db_delete_row(table: str, pk_value: str, admin: str = Depends(require_ad
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================
+# 🚦 功能開關管理（正常／維護中／Beta）
+# ------------------------------------------
+# bot 端會即時讀這份設定：維護中的功能會直接擋下並回覆維護訊息；
+# Beta 只是標記狀態，給監控後台的圖示顯示標籤用，不影響功能是否可用。
+# ==========================================
+class FeatureSwitchUpdate(BaseModel):
+    status: str  # 'normal' | 'maintenance' | 'beta'
+    maintenance_message: Optional[str] = None
+
+def _validate_switch_status(status: str) -> str:
+    if status not in ("normal", "maintenance", "beta"):
+        raise HTTPException(status_code=422, detail="狀態只能是 normal / maintenance / beta")
+    return status
+
+@app.get("/api/admin/feature-switches")
+def api_list_feature_switches(admin: str = Depends(require_admin)):
+    _require_db()
+    try:
+        with db_cursor() as cur:
+            cur.execute("SELECT feature_key, status, label, maintenance_message, updated_at FROM feature_switches ORDER BY feature_key")
+            rows = cur.fetchall()
+        for r in rows:
+            r["updated_at"] = r["updated_at"].isoformat() if r["updated_at"] else None
+        return rows
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/api/admin/feature-switches/{feature_key}")
+def api_update_feature_switch(feature_key: str, body: FeatureSwitchUpdate, admin: str = Depends(require_admin)):
+    """調整後 bot 端最多 5 秒內會讀到最新狀態，不用重啟 bot 服務"""
+    _require_db()
+    status = _validate_switch_status(body.status)
+    try:
+        with db_cursor() as cur:
+            cur.execute("SELECT 1 FROM feature_switches WHERE feature_key=%s", (feature_key,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="找不到這個功能代碼")
+            cur.execute(
+                "UPDATE feature_switches SET status=%s, maintenance_message=%s WHERE feature_key=%s",
+                (status, body.maintenance_message, feature_key)
+            )
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================
+# 🖥️ 監控後台整體設定（總開關／跑馬燈）
+# ==========================================
+class DashboardSettingsUpdate(BaseModel):
+    dashboard_enabled: Optional[bool] = None
+    marquee_enabled: Optional[bool] = None
+    marquee_text: Optional[str] = None
+
+@app.get("/api/admin/dashboard-settings")
+def api_get_dashboard_settings(admin: str = Depends(require_admin)):
+    _require_db()
+    try:
+        with db_cursor() as cur:
+            cur.execute(
+                "SELECT `key`, `value` FROM bot_settings WHERE `key` IN "
+                "('dashboard_enabled', 'marquee_enabled', 'marquee_text')"
+            )
+            s = {r["key"]: r["value"] for r in cur.fetchall()}
+        return {
+            "dashboard_enabled": s.get("dashboard_enabled", "1") == "1",
+            "marquee_enabled": s.get("marquee_enabled", "0") == "1",
+            "marquee_text": s.get("marquee_text") or "",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/dashboard-settings")
+def api_update_dashboard_settings(body: DashboardSettingsUpdate, admin: str = Depends(require_admin)):
+    _require_db()
+    try:
+        with db_cursor() as cur:
+            if body.dashboard_enabled is not None:
+                cur.execute(
+                    "INSERT INTO bot_settings (`key`,`value`) VALUES ('dashboard_enabled', %s) "
+                    "ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)",
+                    ("1" if body.dashboard_enabled else "0",)
+                )
+            if body.marquee_enabled is not None:
+                cur.execute(
+                    "INSERT INTO bot_settings (`key`,`value`) VALUES ('marquee_enabled', %s) "
+                    "ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)",
+                    ("1" if body.marquee_enabled else "0",)
+                )
+            if body.marquee_text is not None:
+                cur.execute(
+                    "INSERT INTO bot_settings (`key`,`value`) VALUES ('marquee_text', %s) "
+                    "ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)",
+                    (body.marquee_text,)
+                )
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AlertSettingsUpdate(BaseModel):
+    admin_notify_user_id: str
+    error_alert_threshold: int
+    error_alert_window_minutes: int
+
+@app.get("/api/admin/alert-settings")
+def api_get_alert_settings(admin: str = Depends(require_admin)):
+    _require_db()
+    try:
+        with db_cursor() as cur:
+            cur.execute(
+                "SELECT `key`, `value` FROM bot_settings WHERE `key` IN "
+                "('admin_notify_user_id', 'error_alert_threshold', 'error_alert_window_minutes')"
+            )
+            s = {r["key"]: r["value"] for r in cur.fetchall()}
+        return {
+            "admin_notify_user_id": s.get("admin_notify_user_id") or "",
+            "error_alert_threshold": int(s.get("error_alert_threshold") or 5),
+            "error_alert_window_minutes": int(s.get("error_alert_window_minutes") or 5),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/alert-settings")
+def api_update_alert_settings(body: AlertSettingsUpdate, admin: str = Depends(require_admin)):
+    _require_db()
+    try:
+        with db_cursor() as cur:
+            for k, v in [
+                ("admin_notify_user_id", body.admin_notify_user_id.strip()),
+                ("error_alert_threshold", str(body.error_alert_threshold)),
+                ("error_alert_window_minutes", str(body.error_alert_window_minutes)),
+            ]:
+                cur.execute(
+                    "INSERT INTO bot_settings (`key`,`value`) VALUES (%s, %s) "
+                    "ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)",
+                    (k, v)
+                )
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================
+# 🚨 異常主動告警：短時間內錯誤筆數超過門檻，主動 LINE 推播通知管理者
+# ------------------------------------------
+# 門檻／時間窗設定放在 bot_settings（error_alert_threshold／error_alert_window_minutes），
+# 通知對象放在 bot_settings（admin_notify_user_id，填您自己的 LINE user_id）。
+# alert_state 記錄上次發送時間，同一個時間窗內不會重複轟炸。
+# ==========================================
+ALERT_COOLDOWN_MINUTES = 30  # 就算持續超標，同一個告警至少間隔這麼久才會再發一次
+
+def _push_line_text(user_id: str, text: str):
+    if not LINE_CHANNEL_ACCESS_TOKEN or not user_id:
+        return
+    try:
+        httpx.post(
+            f"{LINE_API_BASE}/message/push",
+            headers=_line_headers(),
+            json={"to": user_id, "messages": [{"type": "text", "text": text}]},
+            timeout=8.0,
+            verify=certifi.where(),
+        )
+    except Exception as e:
+        print(f"⚠️ 告警推播失敗: {e}", flush=True)
+
+def check_error_spike_and_alert():
+    try:
+        with db_cursor() as cur:
+            cur.execute(
+                "SELECT `key`, `value` FROM bot_settings WHERE `key` IN "
+                "('admin_notify_user_id', 'error_alert_threshold', 'error_alert_window_minutes')"
+            )
+            s = {r["key"]: r["value"] for r in cur.fetchall()}
+            notify_user_id = (s.get("admin_notify_user_id") or "").strip()
+            threshold = int(s.get("error_alert_threshold") or 5)
+            window_minutes = int(s.get("error_alert_window_minutes") or 5)
+            if not notify_user_id:
+                return
+
+            cur.execute(
+                "SELECT COUNT(*) AS c FROM error_logs WHERE created_at >= NOW() - INTERVAL %s MINUTE",
+                (window_minutes,)
+            )
+            error_count = cur.fetchone()["c"]
+            if error_count < threshold:
+                return
+
+            cur.execute("SELECT last_sent_at FROM alert_state WHERE alert_key='error_spike'")
+            row = cur.fetchone()
+            if row and row["last_sent_at"] and datetime.now() - row["last_sent_at"] < timedelta(minutes=ALERT_COOLDOWN_MINUTES):
+                return  # 冷卻期間內，避免重複轟炸
+
+            cur.execute(
+                "INSERT INTO alert_state (alert_key, last_sent_at) VALUES ('error_spike', NOW()) "
+                "ON DUPLICATE KEY UPDATE last_sent_at=NOW()"
+            )
+    except Exception as e:
+        print(f"⚠️ 異常告警檢查失敗: {e}", flush=True)
+        return
+
+    _push_line_text(
+        notify_user_id,
+        f"🚨 【異常告警】記帳米粒最近 {window_minutes} 分鐘內發生 {error_count} 筆錯誤，超過設定門檻（{threshold} 筆），請檢查中控台的「錯誤紀錄」頁面。"
+    )
+
+async def alert_check_loop():
+    while True:
+        try:
+            await asyncio.to_thread(check_error_spike_and_alert)
+        except Exception as e:
+            print(f"⚠️ 告警排程迴圈異常: {e}", flush=True)
+        await asyncio.sleep(5 * 60)  # 每 5 分鐘檢查一次
+
+@app.on_event("startup")
+async def start_alert_scheduler():
+    asyncio.create_task(alert_check_loop())
 
 
 # ---------- 後台網頁本體 ----------

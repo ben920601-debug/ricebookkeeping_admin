@@ -206,6 +206,7 @@
       </div>
       <button class="nav-item active" data-tab="dashboard">📊　總覽</button>
       <button class="nav-item" data-tab="switch">🔴　機器人開關</button>
+      <button class="nav-item" data-tab="features">🚦　功能開關</button>
       <button class="nav-item" data-tab="keywords">💬　關鍵字回覆</button>
       <button class="nav-item" data-tab="sensitive">🚫　敏感詞</button>
       <button class="nav-item" data-tab="groups">👥　群組管理</button>
@@ -268,6 +269,62 @@
             <textarea id="aiPersonaInput" placeholder="你是一個親切、幽默的記帳助理「記帳米粒」。"></textarea>
           </div>
           <button class="btn-sm add" id="aiPersonaSaveBtn">儲存人格設定</button>
+        </div>
+      </div>
+
+      <!-- 功能開關 -->
+      <div class="section" id="tab-features">
+        <div class="panel">
+          <h2>🖥️ 監控後台總開關</h2>
+          <p class="desc">關閉後，使用者從 LINE 點進監控後台會看到維護畫面，不會看到任何記帳資料。適合在後台大改版或資料庫維護時暫時擋下。</p>
+          <div class="switch-row">
+            <div class="txt">
+              <strong>監控後台（index.html）</strong>
+              <span id="dashSwitchHint">讀取中…</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="dashEnabledInput" />
+              <span class="track"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>📢 跑馬燈</h2>
+          <p class="desc">開啟後會在個人監控後台最上方顯示一條跑馬燈文字，方便您隨時公告（例如：「今晚 11 點系統維護」）。設定變更最慢 5 秒內生效。</p>
+          <div class="switch-row">
+            <div class="txt"><strong>跑馬燈顯示</strong></div>
+            <label class="toggle">
+              <input type="checkbox" id="marqueeEnabledInput" />
+              <span class="track"></span>
+            </label>
+          </div>
+          <div class="form-row" style="margin-top:10px;">
+            <input type="text" id="marqueeTextInput" placeholder="跑馬燈文字內容…" style="min-width:280px;flex:1;" />
+          </div>
+          <button class="btn-sm add" id="dashSettingsSaveBtn" style="margin-top:10px;">儲存監控後台設定</button>
+        </div>
+
+        <div class="panel">
+          <h2>🚦 各功能狀態</h2>
+          <p class="desc">「維護中」的功能會讓 bot 直接回覆維護訊息、擋下該功能；「Beta」只是標籤，不影響功能是否可用，主要給監控後台的圖示顯示標籤。調整後最慢 5 秒內生效，不用重啟 bot 服務。</p>
+          <div id="featuresTableWrap"><p class="empty">讀取中…</p></div>
+        </div>
+
+        <div class="panel">
+          <h2>🚨 異常主動告警</h2>
+          <p class="desc">短時間內錯誤筆數超過門檻時，會主動用 LINE 私訊通知您（同一個告警至少間隔 30 分鐘才會再發一次，避免轟炸）。通知對象請填您自己的 LINE user_id（可在「群組廣播」分頁的下拉選單找到您自己）。</p>
+          <div class="form-row">
+            <input type="text" id="alertUserIdInput" placeholder="要通知的 user_id" style="min-width:260px;" />
+          </div>
+          <div class="form-row">
+            <span class="muted" style="align-self:center;font-size:12.5px;">最近</span>
+            <input type="number" id="alertWindowInput" value="5" min="1" max="60" style="width:70px;" />
+            <span class="muted" style="align-self:center;font-size:12.5px;">分鐘內超過</span>
+            <input type="number" id="alertThresholdInput" value="5" min="1" max="999" style="width:70px;" />
+            <span class="muted" style="align-self:center;font-size:12.5px;">筆錯誤就通知</span>
+          </div>
+          <button class="btn-sm add" id="alertSaveBtn">儲存告警設定</button>
         </div>
       </div>
 
@@ -339,7 +396,7 @@
       <div class="section" id="tab-testmode">
         <div class="panel">
           <h2>手動開通</h2>
-          <p class="desc">略過密碼流程，直接幫某個人/群組開通「旅行模式」或「收據辨識」測試功能。（群組團單分攤已下放為群組主要功能，永遠開啟，不需要在這裡開通）</p>
+          <p class="desc">略過密碼流程，直接幫某個人/群組開通測試功能。（群組團單分攤已下放為群組主要功能，永遠開啟，不需要在這裡開通；繳費功能／存錢功能／支付方式僅限個人版，開通對象請選「個人（user）」）</p>
           <div class="form-row">
             <select id="tmOwnerType" class="table-select" style="min-width:100px;">
               <option value="user">個人（user）</option>
@@ -349,6 +406,9 @@
             <select id="tmFeature" class="table-select" style="min-width:140px;">
               <option value="itinerary">旅行模式</option>
               <option value="receipt_ocr">收據辨識</option>
+              <option value="bill_payment">繳費功能（個人限定）</option>
+              <option value="savings">存錢功能（個人限定）</option>
+              <option value="payment_method">支付方式（個人限定）</option>
             </select>
             <input type="number" id="tmHours" value="16" min="1" max="720" style="width:90px;" />
             <span class="muted" style="align-self:center;font-size:12.5px;">小時</span>
@@ -493,7 +553,7 @@ function logout(){
 document.getElementById("logoutBtn").addEventListener("click", logout);
 
 // ---------- 分頁切換 ----------
-const titles = {dashboard:"總覽", switch:"機器人開關", keywords:"關鍵字回覆", sensitive:"敏感詞", groups:"群組管理", broadcast:"群組廣播", testmode:"測試功能", dbbrowser:"資料瀏覽", errors:"錯誤紀錄"};
+const titles = {dashboard:"總覽", switch:"機器人開關", features:"功能開關", keywords:"關鍵字回覆", sensitive:"敏感詞", groups:"群組管理", broadcast:"群組廣播", testmode:"測試功能", dbbrowser:"資料瀏覽", errors:"錯誤紀錄"};
 document.querySelectorAll(".nav-item").forEach(btn => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
@@ -508,6 +568,7 @@ document.querySelectorAll(".nav-item").forEach(btn => {
 function loadTab(tab){
   if (tab === "dashboard") loadDashboard();
   if (tab === "switch") loadSwitch();
+  if (tab === "features") loadFeatures();
   if (tab === "keywords") loadKeywords();
   if (tab === "sensitive") loadSensitive();
   if (tab === "groups") loadGroups();
@@ -592,6 +653,106 @@ document.getElementById("aiPersonaSaveBtn").addEventListener("click", async () =
 document.getElementById("switchRefreshBtn").addEventListener("click", () => {
   loadSwitch();
   toast("已重新查詢（bot 端最慢 5 秒內會自動套用最新設定）", "ok");
+});
+
+// ---------- 功能開關 ----------
+let _featureRows = [];
+
+async function loadFeatures() {
+  await Promise.all([loadDashboardSettings(), loadAlertSettings(), loadFeatureSwitches()]);
+}
+
+async function loadDashboardSettings() {
+  try {
+    const s = await api("/api/admin/dashboard-settings");
+    document.getElementById("dashEnabledInput").checked = s.dashboard_enabled;
+    document.getElementById("dashSwitchHint").textContent = s.dashboard_enabled ? "使用者可正常瀏覽" : "目前顯示維護畫面";
+    document.getElementById("marqueeEnabledInput").checked = s.marquee_enabled;
+    document.getElementById("marqueeTextInput").value = s.marquee_text || "";
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function loadAlertSettings() {
+  try {
+    const s = await api("/api/admin/alert-settings");
+    document.getElementById("alertUserIdInput").value = s.admin_notify_user_id || "";
+    document.getElementById("alertWindowInput").value = s.error_alert_window_minutes;
+    document.getElementById("alertThresholdInput").value = s.error_alert_threshold;
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function loadFeatureSwitches() {
+  const wrap = document.getElementById("featuresTableWrap");
+  try {
+    _featureRows = await api("/api/admin/feature-switches");
+    renderFeaturesTable();
+  } catch (e) { wrap.innerHTML = `<p class="empty">讀取失敗：${escapeHtml(e.message)}</p>`; }
+}
+
+function renderFeaturesTable() {
+  const wrap = document.getElementById("featuresTableWrap");
+  if (!_featureRows.length) { wrap.innerHTML = '<p class="empty">目前沒有任何功能設定，請先執行 migration_v1.9.sql</p>'; return; }
+  wrap.innerHTML = `<table><thead><tr><th>功能</th><th>狀態</th><th>維護訊息（選填）</th><th></th></tr></thead><tbody>
+    ${_featureRows.map(r => `
+      <tr>
+        <td>${escapeHtml(r.label)}</td>
+        <td>
+          <select class="table-select" id="fsStatus_${r.feature_key}" style="min-width:110px;">
+            <option value="normal" ${r.status === "normal" ? "selected" : ""}>✅ 正常</option>
+            <option value="maintenance" ${r.status === "maintenance" ? "selected" : ""}>🛠️ 維護中</option>
+            <option value="beta" ${r.status === "beta" ? "selected" : ""}>🧪 Beta</option>
+          </select>
+        </td>
+        <td><input type="text" id="fsMsg_${r.feature_key}" value="${escapeHtml(r.maintenance_message || '')}" placeholder="預設：🛠️ 此功能維護中，請稍後再試。" style="width:100%;" /></td>
+        <td><button class="btn-sm add" onclick="saveFeatureSwitch('${r.feature_key}')">儲存</button></td>
+      </tr>`).join("")}
+  </tbody></table>`;
+}
+
+window.saveFeatureSwitch = async function(featureKey) {
+  const status = document.getElementById(`fsStatus_${featureKey}`).value;
+  const msg = document.getElementById(`fsMsg_${featureKey}`).value.trim();
+  try {
+    await api(`/api/admin/feature-switches/${featureKey}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status, maintenance_message: msg || null })
+    });
+    toast("已儲存（bot 端最慢 5 秒內生效）", "ok");
+    loadFeatureSwitches();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+document.getElementById("dashSettingsSaveBtn").addEventListener("click", async () => {
+  try {
+    await api("/api/admin/dashboard-settings", {
+      method: "POST",
+      body: JSON.stringify({
+        dashboard_enabled: document.getElementById("dashEnabledInput").checked,
+        marquee_enabled: document.getElementById("marqueeEnabledInput").checked,
+        marquee_text: document.getElementById("marqueeTextInput").value.trim(),
+      })
+    });
+    toast("已儲存監控後台設定", "ok");
+    loadDashboardSettings();
+  } catch (e) { toast(e.message, "err"); }
+});
+
+document.getElementById("alertSaveBtn").addEventListener("click", async () => {
+  const userId = document.getElementById("alertUserIdInput").value.trim();
+  const windowMin = parseInt(document.getElementById("alertWindowInput").value, 10);
+  const threshold = parseInt(document.getElementById("alertThresholdInput").value, 10);
+  if (!windowMin || !threshold) return toast("時間與門檻請填正整數", "err");
+  try {
+    await api("/api/admin/alert-settings", {
+      method: "POST",
+      body: JSON.stringify({
+        admin_notify_user_id: userId,
+        error_alert_threshold: threshold,
+        error_alert_window_minutes: windowMin,
+      })
+    });
+    toast("已儲存告警設定", "ok");
+  } catch (e) { toast(e.message, "err"); }
 });
 
 // ---------- 關鍵字回覆 ----------
